@@ -1,7 +1,7 @@
-const CACHE_NAME = 'sitesignin-v1';
+const CACHE_NAME = 'sitesignin-v2';
 const APP_SHELL = [
   './index.html', './manifest.json', './icon-192.png', './icon-512.png', './style.css',
-  './js/modal.js', './js/storage.js', './js/app.js'
+  './js/modal.js', './js/storage.js', './js/app.js', './js/admin-view.js'
 ];
 
 self.addEventListener('install', (event) => {

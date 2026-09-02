@@ -21,12 +21,12 @@ choice, to avoid provisioning a second one), in its own tables.
   company, trade, phone; saved to `localStorage` so every later visit on
   that phone skips straight to sign-in. "Not you? Switch profile" clears it
   for a shared device.
-- **`admin.html`** — a real login (per-person Supabase account) for
-  reviewing who's currently on site, the full activity history, and every
-  submitted file, with a date-range filter, CSV export, and print view for
-  handing to a safety auditor. Installs as its **own** separate home-screen
-  app (different icon/name from the subcontractor one), so it's not sitting
-  inside the app regular workers use.
+- **Admin tab** — a real login (per-person Supabase account) for reviewing
+  who's currently on site, the full activity history, and every submitted
+  file, with a date-range filter, CSV export, and print view for handing to
+  a safety auditor. Lives inside the same app as a second tab, not a
+  separate install — see "Admin tab" below for how that stays restricted to
+  invited people even though the tab itself is visible to anyone.
 - **`qr.html`** — printable QR code page pointing at the sign-in app; post
   it at the site entrance/trailer.
 
@@ -34,22 +34,21 @@ choice, to avoid provisioning a second one), in its own tables.
 Plain static HTML/CSS/JS, no build step, no framework — same style as the
 Site Log app it's a sibling to. Deploy target is GitHub Pages.
 
-This is really **two independent installable PWAs sharing one repo/deploy**
-— the subcontractor app and the admin dashboard each have their own
-manifest, icon, and service worker (with the admin one explicitly scoped to
-just `admin.html`, so the two service workers don't collide over the same
-root scope). Nothing links between them in the UI — a subcontractor using
-the sign-in app has no path to `admin.html` short of typing the URL, and
-even then, the login screen (backed by a real Supabase account, not a
-shared code) is what actually stops them, not obscurity.
+One app, one installed icon, one URL — `index.html` has a small bottom tab
+bar with **Sign In** (the subcontractor flow) and **Admin**. Both tabs
+render into the same page; switching tabs just swaps what's in `#app`, no
+navigation/reload. `admin.html` still exists as a redirect stub (in case
+anyone bookmarked or installed it from before this changed) that sends
+visitors to `index.html` and cleans up the old standalone admin service
+worker/cache along the way.
 
-- `index.html` / `style.css` / `manifest.json` / `sw.js` — the subcontractor-facing app
-- `admin.html` / `admin-manifest.json` / `admin-sw.js` / `admin-icon-*.png` — the review dashboard (login required), installable separately
+- `index.html` / `style.css` / `manifest.json` / `sw.js` — the app shell (both tabs)
+- `admin.html` — legacy redirect to `index.html`, not otherwise used
 - `qr.html` — printable QR code
 - `js/storage.js` — Supabase config, subcontractor-flow data access (profile, sign in/out, document upload/submit, local status/activity tracking), and admin auth (Supabase Auth session handling)
-- `js/modal.js` — modal/toast/confirm helpers, `escapeHtml`, and the shared "Add to Home Screen" hint (used by both `index.html` and `admin.html`, each with its own dismiss key/blurb)
-- `js/app.js` — subcontractor app UI (setup, home, sign-in form, submit flow)
-- `js/admin.js` — admin login + dashboard UI (date filter, CSV export, print)
+- `js/modal.js` — modal/toast/confirm helpers, `escapeHtml`, and the "Add to Home Screen" hint
+- `js/app.js` — tab-switch wiring + subcontractor app UI (setup, home, sign-in form, submit flow)
+- `js/admin-view.js` — Admin tab UI (login, dashboard, date filter, CSV export, print); loaded after `js/app.js` and shares its `app`/`DOC_TYPES` globals rather than redeclaring them
 
 ## Data / Storage
 Uses the same Supabase project as the Site Log app
@@ -63,7 +62,7 @@ Uses the same Supabase project as the Site Log app
 open to anyone with the public anon key — a subcontractor scanning the QR
 code has zero setup, so there's nothing to gate sign-in/sign-out/submission
 with. SELECT is restricted to the `authenticated` Supabase role — only
-someone logged into `admin.html` with a real account can read the data
+someone logged into the Admin tab with a real account can read the data
 back. (Because reads are locked down, the subcontractor app itself never
 reads these tables — "am I signed in" and "recent activity" are tracked
 locally in `localStorage` on the phone instead; see `js/storage.js`.)
@@ -120,8 +119,12 @@ create policy "authenticated select safety_documents" on safety_documents for se
 Then **Storage → New bucket** named exactly `safety-submissions`, set to
 **Public bucket** (same reasoning as the Site Log app's `hazard-photos`
 bucket — the anon key is already public by design; this isn't a new
-exposure, and it's what lets `admin.html`'s "View submitted file" links
+exposure, and it's what lets the Admin tab's "View submitted file" links
 work with a plain URL).
+
+Until the tables/bucket above exist, `index.html` loads fine but every
+sign-in/sign-out and form submission fails with a toast — nothing else
+breaks.
 
 ### Migration: daily sign-in form columns
 The sign-in flow now collects a full daily questionnaire + signature (see
@@ -165,21 +168,18 @@ is recorded:
 - A signature — draw with a finger/stylus on a canvas, or tap "Type
   instead" for a typed name. Drawn signatures upload as a PNG to Storage;
   typed ones are stored as plain text. Both are shown/exportable from
-  `admin.html`.
+  the Admin tab.
 
 All of this is stored per sign-in on `site_visits` and surfaced in
-`admin.html`'s activity feed and CSV export, so a specific day's crew
+the Admin tab's activity feed and CSV export, so a specific day's crew
 count, names, orientation/fit-for-work answers, and signature are all part
 of the audit record — not just "so-and-so signed in at 7:03am."
 
 Sign-out stays a single tap — no questionnaire, since the crew/orientation
 info doesn't change mid-day.
 
-Until these exist, `index.html` loads fine but every sign-in/sign-out and
-form submission fails with a toast — nothing else breaks.
-
-## Admin accounts (`admin.html`) — real per-person logins
-`admin.html` requires signing in with a Supabase Auth account. This is a
+## Admin accounts (Admin tab) — real per-person logins
+The Admin tab requires signing in with a Supabase Auth account. This is a
 genuine access-control boundary (unlike a client-side passphrase): the
 SELECT policies above only grant read access to the `authenticated` role,
 so without a valid login the data cannot be read back at all — not even by
@@ -196,26 +196,26 @@ someone with the anon key inspecting network requests.
 3. **Authentication → Users → Add user → Invite user** — do this once for
    yourself and once per coworker/boss who needs access. Each person gets
    an email with a link to set their own password; after that they sign
-   into `admin.html` with their email + that password.
+   into the Admin tab with their email + that password.
 
 **Revoking access:** delete the person's user in that same Authentication →
 Users screen. Immediate — their session stops being able to read data next
 time their token needs refreshing (tokens are short-lived, so this takes
 effect quickly even if they don't explicitly log out).
 
-**Installing it:** open `https://joshperlette9497.github.io/site-signin/admin.html`
-in Safari/Chrome and use "Add to Home Screen" (same steps as the
-subcontractor app — the page itself shows a hint with instructions). It
-installs as its own icon labeled "Admin," visually marked with a gold badge
-so it doesn't look like the subcontractor app's icon at a glance. Each
-invited person does this on their own phone/browser.
+**Using it:** the Admin tab lives inside the same app as the subcontractor
+sign-in flow — no separate install. Open the app (or tap its home-screen
+icon if installed), tap **Admin** in the bottom tab bar, and log in. Anyone
+who opens the app sees that tab, including subcontractors — tapping it just
+gets them the same login screen, which they can't get past without an
+invited account. That's the actual boundary, not the tab's visibility.
 
 **Forgotten passwords:** no self-service reset flow is built into this app;
 have them ask you to resend an invite (or add Supabase's password-reset
 email flow later if this comes up often).
 
 ## Reviewing records / audits
-`admin.html`, once logged in, shows:
+The Admin tab, once logged in, shows:
 - **On Site Now** — anyone with an open sign-in and no sign-out yet.
 - **Activity**, filterable by date range — every sign-in, sign-out, and
   form submission, with a link to view each submitted file.
@@ -243,7 +243,6 @@ contents.
   contain.
 - **GitHub Pages**: enable under Settings → Pages → Deploy from a branch →
   `main` / root. No build step.
-- Once live, the app/admin/QR URLs are:
-  - Sign-in app: `https://joshperlette9497.github.io/site-signin/`
-  - Admin dashboard: `https://joshperlette9497.github.io/site-signin/admin.html`
-  - Printable QR: `https://joshperlette9497.github.io/site-signin/qr.html`
+- Once live, the app is at `https://joshperlette9497.github.io/site-signin/`
+  — the Admin tab is inside it, and the printable QR is at
+  `https://joshperlette9497.github.io/site-signin/qr.html`.

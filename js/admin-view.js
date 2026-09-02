@@ -1,16 +1,31 @@
-/* ---------- admin login (real Supabase Auth accounts) ----------
+/* ---------- Admin tab (real Supabase Auth accounts) ----------
    Josh invites each coworker/boss as their own user in the Supabase
    dashboard (Authentication -> Users -> Invite user) — see README. This
-   page requires a live session; the subcontractors/site_visits/
+   tab requires a live session; the subcontractors/site_visits/
    safety_documents tables' SELECT policies are restricted to the
-   `authenticated` role, so a valid login is what actually gates reads
-   (not just a UI prompt). Revoking someone's access = deleting their user
-   in that same Supabase dashboard screen. */
-const ADMIN_INSTALL_BLURB = "Keeps this separate from the subcontractor sign-in app on your phone — only people you've invited can log in.";
+   `authenticated` role, so a valid login is what actually keeps regular
+   workers out (not just the tab being visible) — reads fail outright
+   without one, even for someone who reads the source and calls the API
+   directly. Revoking someone's access = deleting their user in that same
+   Supabase dashboard screen.
 
-function renderLogin(){
+   Loaded into the same page/scope as js/app.js (which already declares
+   `const app` and `DOC_TYPES` — reused here, not redeclared) — this file
+   only adds the Admin-tab rendering; js/app.js's tab-click handler decides
+   when to call renderAdminTab(). */
+
+async function renderAdminTab(){
+  const session = getAdminSession();
+  if(session){
+    const fresh = await ensureFreshAdminSession();
+    if(fresh){ renderAdminDashboard(); return; }
+  }
+  renderAdminLogin();
+}
+
+function renderAdminLogin(){
+  setHeader('Admin sign-in');
   app.innerHTML = `
-    ${installHintHtml('adminInstallHintDismissed', ADMIN_INSTALL_BLURB)}
     <div class="card">
       <div class="helptext">Sign in with the account Josh set up for you to view sign-ins and submitted safety forms.</div>
     </div>
@@ -21,7 +36,6 @@ function renderLogin(){
     <button class="btn" id="loginBtn" style="width:100%; margin-top:18px;">Sign In</button>
     <div class="helptext" style="margin-top:10px;">No account? Ask Josh to invite you from the Supabase dashboard.</div>
   `;
-  wireInstallHint();
   const submit = async ()=>{
     const email = document.getElementById('loginEmail').value.trim();
     const password = document.getElementById('loginPassword').value;
@@ -30,7 +44,7 @@ function renderLogin(){
     btn.disabled = true; btn.textContent = 'Signing in…';
     try{
       await adminSignIn(email, password);
-      renderDashboard();
+      renderAdminDashboard();
     }catch(e){
       showToast(e.message || 'Could not sign in.');
       btn.disabled = false; btn.textContent = 'Sign In';
@@ -41,11 +55,6 @@ function renderLogin(){
 }
 
 /* ---------- data ---------- */
-const SUB_DOC_TYPES = {
-  hazard_assessment: 'Hazard Assessment',
-  equipment_cert: 'Equipment Operation Certificate',
-  incident_report: 'Incident Report'
-};
 async function fetchSubVisits(){
   return adminFetch('/rest/v1/site_visits?order=sign_in_at.desc&limit=1000&select=*');
 }
@@ -64,12 +73,11 @@ function mergeActivity(visits, docs){
       signatureType: v.signature_type, signatureText: v.signature_text, signatureUrl: v.signature_file_url
     })),
     ...visits.filter(v=>v.sign_out_at).map(v=>({ ts: v.sign_out_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed out' })),
-    ...docs.map(d=>({ ts: d.uploaded_at, name: d.subcontractor_name, company: d.subcontractor_company, label: `Submitted: ${SUB_DOC_TYPES[d.type] || d.type}`, url: d.file_url, notes: d.notes }))
+    ...docs.map(d=>({ ts: d.uploaded_at, name: d.subcontractor_name, company: d.subcontractor_company, label: `Submitted: ${DOC_TYPES[d.type] || d.type}`, url: d.file_url, notes: d.notes }))
   ].sort((a,b)=> new Date(b.ts) - new Date(a.ts));
 }
 
 /* ---------- dashboard ---------- */
-const app = document.getElementById('app');
 let allVisits = [], allDocs = [];
 
 function defaultFromDate(){
@@ -78,7 +86,8 @@ function defaultFromDate(){
 }
 function todayDate(){ return new Date().toISOString().slice(0,10); }
 
-async function renderDashboard(){
+async function renderAdminDashboard(){
+  setHeader("Who's on site & submitted forms");
   const session = getAdminSession();
   app.innerHTML = `
     <div class="card no-print">
@@ -109,10 +118,10 @@ async function renderDashboard(){
   document.getElementById('signOutLink').onclick = async (e)=>{
     e.preventDefault();
     await adminSignOut();
-    renderLogin();
+    renderAdminLogin();
   };
-  document.getElementById('fromDate').onchange = renderFiltered;
-  document.getElementById('toDate').onchange = renderFiltered;
+  document.getElementById('fromDate').onchange = renderAdminFiltered;
+  document.getElementById('toDate').onchange = renderAdminFiltered;
   document.getElementById('exportCsvBtn').onclick = exportCSV;
   document.getElementById('printBtn').onclick = ()=>window.print();
 
@@ -122,15 +131,15 @@ async function renderDashboard(){
     console.error('admin load failed', e);
     if(String(e.message).includes('signed in') || String(e.message).includes('expired')){
       showToast('Your session expired — sign in again.');
-      renderLogin();
+      renderAdminLogin();
       return;
     }
     document.getElementById('onSite').innerHTML = `<div class="helptext">Couldn't load — check your connection.</div>`;
     document.getElementById('activity').innerHTML = '';
     return;
   }
-  renderOnSite(allVisits);
-  renderFiltered();
+  renderAdminOnSite(allVisits);
+  renderAdminFiltered();
 }
 
 function filteredRange(){
@@ -141,16 +150,16 @@ function filteredRange(){
   return { fromTs, toTs };
 }
 
-function renderFiltered(){
+function renderAdminFiltered(){
   const { fromTs, toTs } = filteredRange();
   const items = mergeActivity(allVisits, allDocs).filter(it=>{
     const t = new Date(it.ts).getTime();
     return t >= fromTs && t <= toTs;
   });
-  renderActivity(items);
+  renderAdminActivityList(items);
 }
 
-function renderOnSite(visits){
+function renderAdminOnSite(visits){
   const onSite = visits.filter(v=>!v.sign_out_at);
   const el = document.getElementById('onSite');
   if(!onSite.length){ el.innerHTML = `<div class="empty">Nobody currently signed in.</div>`; return; }
@@ -167,7 +176,7 @@ function renderOnSite(visits){
   `).join('');
 }
 
-function renderActivity(items){
+function renderAdminActivityList(items){
   const el = document.getElementById('activity');
   if(!items.length){ el.innerHTML = `<div class="empty">No sign-ins or submissions in this range.</div>`; return; }
   el.innerHTML = items.map(it=>`
@@ -223,24 +232,4 @@ function exportCSV(){
   a.href = url; a.download = `site-signin-${from}_to_${to}.csv`;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
-}
-
-/* ---------- init ---------- */
-(async function init(){
-  const session = getAdminSession();
-  if(session){
-    const fresh = await ensureFreshAdminSession();
-    if(fresh){ renderDashboard(); return; }
-  }
-  renderLogin();
-})();
-
-/* Explicit narrow scope so this doesn't collide with index.html's own
-   service worker registration (js/app.js -> sw.js), which defaults to
-   scope '/' — without this, both registrations would key off the same
-   root scope and fight over which one controls which page. */
-if('serviceWorker' in navigator){
-  window.addEventListener('load', ()=>{
-    navigator.serviceWorker.register('admin-sw.js', { scope: './admin.html' }).catch(e=>console.error('SW registration failed', e));
-  });
 }

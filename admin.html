@@ -2,33 +2,23 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0">
-<title>Site Sign-In — Admin</title>
-<link rel="manifest" href="admin-manifest.json">
-<meta name="theme-color" content="#1F5C60">
-<link rel="apple-touch-icon" href="admin-icon-192.png">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Admin">
-<link rel="stylesheet" href="style.css">
-<style>
-  @media print{
-    header.top, .no-print{display:none;}
-    .card{break-inside:avoid; border-color:#999;}
-  }
-</style>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Site Sign-In</title>
+<meta http-equiv="refresh" content="0; url=./index.html">
 </head>
 <body>
-
-<header class="top">
-  <h1>Site Sign-In — Admin</h1>
-  <div class="sub" id="headerSub">Who's on site &amp; submitted forms</div>
-</header>
-
-<main id="app"></main>
-
-<script src="js/modal.js"></script>
-<script src="js/storage.js"></script>
-<script src="js/admin.js"></script>
+<script>
+  // Admin is now the "Admin" tab inside the main app rather than its own
+  // page/installed icon — clean up the old standalone-admin service worker
+  // and cache so nothing stale lingers, then redirect.
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
+  }
+  if('caches' in window){
+    caches.keys().then(keys => keys.forEach(k => { if(k.startsWith('sitesigninadmin-')) caches.delete(k); }));
+  }
+  location.replace('./index.html');
+</script>
+<p>Admin is now a tab inside the main app — redirecting… <a href="./index.html">Continue</a></p>
 </body>
 </html>

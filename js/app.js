@@ -16,6 +16,20 @@ function setHeader(sub){
 
 const INSTALL_HINT_BLURB = "Next time you won't need to rescan the QR code.";
 
+/* ---------- tabs ----------
+   Same app/URL for everyone — a subcontractor sees this tab bar too, and
+   can tap Admin, but renderAdminTab() (js/admin-view.js) just shows a real
+   Supabase login they have no account for. The tab being visible isn't the
+   access control; the login is. */
+document.querySelectorAll('nav.tabs button').forEach(b=>{
+  b.onclick = ()=>{
+    document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    if(b.dataset.tab === 'admin') renderAdminTab();
+    else { const profile = getProfile(); if(profile) renderHome(); else renderSetup(); }
+  };
+});
+
 /* ---------- setup (one-time profile) ---------- */
 function renderSetup(){
   setHeader('Quick one-time setup');
