@@ -20,6 +20,17 @@ const DOCS_BUCKET = 'safety-submissions';
 
 function uid(){ return Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4); }
 
+/* Builds an error that includes Supabase's actual response body (a
+   PostgREST/Storage error like "column crew_count does not exist" or an
+   RLS policy violation) instead of just a status code — the UI shows this
+   text directly so a failure is diagnosable without opening dev tools. */
+async function apiError(action, res){
+  const body = await res.text().catch(()=>'');
+  let detail = body;
+  try{ const j = JSON.parse(body); detail = j.message || j.error_description || j.msg || body; }catch(e){ /* not JSON */ }
+  return new Error(`${action} failed (${res.status}): ${detail || 'no details returned'}`);
+}
+
 /* ---------- profile (device-local "memory") ---------- */
 function getProfile(){
   try{ return JSON.parse(localStorage.getItem('subProfile') || 'null'); }
@@ -59,7 +70,7 @@ async function createSubcontractor(profile){
       created_at: new Date().toISOString()
     })
   });
-  if(!res.ok) throw new Error(`Could not save profile (${res.status})`);
+  if(!res.ok) throw await apiError('Save profile', res);
 }
 
 /* ---------- site visits (sign in / sign out) ---------- */
@@ -84,7 +95,7 @@ async function signIn(profile, form){
     headers: { ...SUPABASE_HEADERS, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
     body: JSON.stringify(visit)
   });
-  if(!res.ok) throw new Error(`Sign-in failed (${res.status})`);
+  if(!res.ok) throw await apiError('Sign-in', res);
   setCurrentVisit({ id: visit.id, sign_in_at: visit.sign_in_at });
   pushActivityLog({ ts: visit.sign_in_at, label: `Signed in — crew of ${form.crewCount}` });
 }
@@ -95,7 +106,7 @@ async function signOut(visitId){
     headers: { ...SUPABASE_HEADERS, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
     body: JSON.stringify({ sign_out_at: signOutAt })
   });
-  if(!res.ok) throw new Error(`Sign-out failed (${res.status})`);
+  if(!res.ok) throw await apiError('Sign-out', res);
   clearCurrentVisit();
   pushActivityLog({ ts: signOutAt, label: 'Signed out' });
 }
@@ -108,7 +119,7 @@ async function uploadSignatureBlob(blob){
     headers: { ...SUPABASE_HEADERS, 'Content-Type': 'image/png' },
     body: blob
   });
-  if(!res.ok) throw new Error(`Signature upload failed (${res.status})`);
+  if(!res.ok) throw await apiError('Signature upload', res);
   return `${SUPABASE_URL}/storage/v1/object/public/${DOCS_BUCKET}/${path}`;
 }
 
@@ -121,7 +132,7 @@ async function uploadDocFile(file){
     headers: { ...SUPABASE_HEADERS, 'Content-Type': file.type || 'application/octet-stream' },
     body: file
   });
-  if(!res.ok) throw new Error(`Upload failed (${res.status})`);
+  if(!res.ok) throw await apiError('Upload', res);
   return `${SUPABASE_URL}/storage/v1/object/public/${DOCS_BUCKET}/${path}`;
 }
 async function submitDocument(profile, type, fileUrl, notes, docTypeLabel){
@@ -136,7 +147,7 @@ async function submitDocument(profile, type, fileUrl, notes, docTypeLabel){
       uploaded_at: uploadedAt
     })
   });
-  if(!res.ok) throw new Error(`Could not save submission (${res.status})`);
+  if(!res.ok) throw await apiError('Save submission', res);
   pushActivityLog({ ts: uploadedAt, label: `Submitted: ${docTypeLabel}` });
 }
 

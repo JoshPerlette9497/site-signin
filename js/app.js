@@ -84,7 +84,7 @@ function renderSetup(){
       await renderHome();
     }catch(e){
       console.error(e);
-      showToast("Couldn't save — check your connection and try again.");
+      showToast(e.message || "Couldn't save — check your connection and try again.");
       btn.disabled = false; btn.textContent = 'Continue';
     }
   };
@@ -164,7 +164,7 @@ function refreshStatus(){
         refreshActivity();
       }catch(e){
         console.error(e);
-        showToast("Couldn't sign out — check your connection and try again.");
+        showToast(e.message || "Couldn't sign out — check your connection and try again.");
         btn.disabled = false; btn.textContent = 'Sign Out';
       }
     };
@@ -350,7 +350,7 @@ async function submitSignInForm(profile, canvas){
     refreshActivity();
   }catch(e){
     console.error(e);
-    showToast("Couldn't sign in — check your connection and try again.");
+    showToast(e.message || "Couldn't sign in — check your connection and try again.");
     btn.disabled = false; btn.textContent = 'Complete Sign-In';
   }
 }
@@ -392,7 +392,7 @@ function openSubmitModal(type){
       refreshActivity();
     }catch(e){
       console.error(e);
-      showToast("Couldn't submit — check your connection and try again.");
+      showToast(e.message || "Couldn't submit — check your connection and try again.");
       btn.disabled = false; btn.textContent = 'Submit';
     }
   };
