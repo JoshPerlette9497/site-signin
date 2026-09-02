@@ -32,3 +32,39 @@ function showConfirm(msg, onYes){
   document.getElementById('confirmNo').onclick = closeModal;
   document.getElementById('confirmYes').onclick = ()=>{ closeModal(); onYes(); };
 }
+
+/* ---------- add-to-home-screen hint ----------
+   Shared by index.html (subcontractor app) and admin.html (Josh's
+   dashboard) — each installs as its own separate home-screen icon, so each
+   page passes its own dismissKey and blurb. */
+function isStandalone(){
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+function isIOS(){
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+}
+function installHintHtml(dismissKey, blurb){
+  if(isStandalone() || localStorage.getItem(dismissKey)) return '';
+  const steps = isIOS()
+    ? 'Tap the <strong>Share</strong> icon, then <strong>Add to Home Screen</strong>.'
+    : 'Tap the <strong>⋮</strong> menu, then <strong>Add to Home screen</strong> (or <strong>Install app</strong>).';
+  return `
+    <div class="card install-hint" id="installHint" data-dismiss-key="${dismissKey}">
+      <div class="row">
+        <div>
+          <div style="font-weight:700;">Add this to your Home Screen</div>
+          <div class="item-meta">${steps} ${blurb}</div>
+        </div>
+        <button class="btn ghost small" id="installHintDismiss">×</button>
+      </div>
+    </div>
+  `;
+}
+function wireInstallHint(){
+  const el = document.getElementById('installHint');
+  if(!el) return;
+  document.getElementById('installHintDismiss').onclick = ()=>{
+    localStorage.setItem(el.dataset.dismissKey, '1');
+    el.remove();
+  };
+}

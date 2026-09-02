@@ -6,8 +6,11 @@
    `authenticated` role, so a valid login is what actually gates reads
    (not just a UI prompt). Revoking someone's access = deleting their user
    in that same Supabase dashboard screen. */
+const ADMIN_INSTALL_BLURB = "Keeps this separate from the subcontractor sign-in app on your phone — only people you've invited can log in.";
+
 function renderLogin(){
   app.innerHTML = `
+    ${installHintHtml('adminInstallHintDismissed', ADMIN_INSTALL_BLURB)}
     <div class="card">
       <div class="helptext">Sign in with the account Josh set up for you to view sign-ins and submitted safety forms.</div>
     </div>
@@ -18,6 +21,7 @@ function renderLogin(){
     <button class="btn" id="loginBtn" style="width:100%; margin-top:18px;">Sign In</button>
     <div class="helptext" style="margin-top:10px;">No account? Ask Josh to invite you from the Supabase dashboard.</div>
   `;
+  wireInstallHint();
   const submit = async ()=>{
     const email = document.getElementById('loginEmail').value.trim();
     const password = document.getElementById('loginPassword').value;
@@ -230,3 +234,13 @@ function exportCSV(){
   }
   renderLogin();
 })();
+
+/* Explicit narrow scope so this doesn't collide with index.html's own
+   service worker registration (js/app.js -> sw.js), which defaults to
+   scope '/' — without this, both registrations would key off the same
+   root scope and fight over which one controls which page. */
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('admin-sw.js', { scope: './admin.html' }).catch(e=>console.error('SW registration failed', e));
+  });
+}

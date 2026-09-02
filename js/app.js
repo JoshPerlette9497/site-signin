@@ -14,43 +14,13 @@ function setHeader(sub){
   document.getElementById('headerSub').textContent = sub;
 }
 
-/* ---------- add-to-home-screen hint ---------- */
-function isStandalone(){
-  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
-}
-function isIOS(){
-  return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-}
-function installHintHtml(){
-  if(isStandalone() || localStorage.getItem('installHintDismissed')) return '';
-  const steps = isIOS()
-    ? 'Tap the <strong>Share</strong> icon, then <strong>Add to Home Screen</strong>.'
-    : 'Tap the <strong>⋮</strong> menu, then <strong>Add to Home screen</strong> (or <strong>Install app</strong>).';
-  return `
-    <div class="card install-hint" id="installHint">
-      <div class="row">
-        <div>
-          <div style="font-weight:700;">Add this to your Home Screen</div>
-          <div class="item-meta">${steps} Next time you won't need to rescan the QR code.</div>
-        </div>
-        <button class="btn ghost small" id="installHintDismiss">×</button>
-      </div>
-    </div>
-  `;
-}
-function wireInstallHint(){
-  const dismiss = document.getElementById('installHintDismiss');
-  if(dismiss) dismiss.onclick = ()=>{
-    localStorage.setItem('installHintDismissed', '1');
-    document.getElementById('installHint').remove();
-  };
-}
+const INSTALL_HINT_BLURB = "Next time you won't need to rescan the QR code.";
 
 /* ---------- setup (one-time profile) ---------- */
 function renderSetup(){
   setHeader('Quick one-time setup');
   app.innerHTML = `
-    ${installHintHtml()}
+    ${installHintHtml('installHintDismissed', INSTALL_HINT_BLURB)}
     <div class="card">
       <div class="helptext">This only takes a moment. Your info is saved on this phone, so you won't have to enter it again on future visits.</div>
     </div>
@@ -96,7 +66,7 @@ async function renderHome(){
   const profile = getProfile();
   setHeader(`Welcome back, ${profile.name.split(' ')[0]}`);
   app.innerHTML = `
-    ${installHintHtml()}
+    ${installHintHtml('installHintDismissed', INSTALL_HINT_BLURB)}
     <div class="card">
       <div class="row">
         <div>

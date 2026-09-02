@@ -24,7 +24,9 @@ choice, to avoid provisioning a second one), in its own tables.
 - **`admin.html`** — a real login (per-person Supabase account) for
   reviewing who's currently on site, the full activity history, and every
   submitted file, with a date-range filter, CSV export, and print view for
-  handing to a safety auditor.
+  handing to a safety auditor. Installs as its **own** separate home-screen
+  app (different icon/name from the subcontractor one), so it's not sitting
+  inside the app regular workers use.
 - **`qr.html`** — printable QR code page pointing at the sign-in app; post
   it at the site entrance/trailer.
 
@@ -32,12 +34,21 @@ choice, to avoid provisioning a second one), in its own tables.
 Plain static HTML/CSS/JS, no build step, no framework — same style as the
 Site Log app it's a sibling to. Deploy target is GitHub Pages.
 
+This is really **two independent installable PWAs sharing one repo/deploy**
+— the subcontractor app and the admin dashboard each have their own
+manifest, icon, and service worker (with the admin one explicitly scoped to
+just `admin.html`, so the two service workers don't collide over the same
+root scope). Nothing links between them in the UI — a subcontractor using
+the sign-in app has no path to `admin.html` short of typing the URL, and
+even then, the login screen (backed by a real Supabase account, not a
+shared code) is what actually stops them, not obscurity.
+
 - `index.html` / `style.css` / `manifest.json` / `sw.js` — the subcontractor-facing app
-- `admin.html` — the review dashboard (login required)
+- `admin.html` / `admin-manifest.json` / `admin-sw.js` / `admin-icon-*.png` — the review dashboard (login required), installable separately
 - `qr.html` — printable QR code
 - `js/storage.js` — Supabase config, subcontractor-flow data access (profile, sign in/out, document upload/submit, local status/activity tracking), and admin auth (Supabase Auth session handling)
-- `js/modal.js` — modal/toast/confirm helpers + `escapeHtml`
-- `js/app.js` — subcontractor app UI (setup, home, submit flow)
+- `js/modal.js` — modal/toast/confirm helpers, `escapeHtml`, and the shared "Add to Home Screen" hint (used by both `index.html` and `admin.html`, each with its own dismiss key/blurb)
+- `js/app.js` — subcontractor app UI (setup, home, sign-in form, submit flow)
 - `js/admin.js` — admin login + dashboard UI (date filter, CSV export, print)
 
 ## Data / Storage
@@ -191,6 +202,13 @@ someone with the anon key inspecting network requests.
 Users screen. Immediate — their session stops being able to read data next
 time their token needs refreshing (tokens are short-lived, so this takes
 effect quickly even if they don't explicitly log out).
+
+**Installing it:** open `https://joshperlette9497.github.io/site-signin/admin.html`
+in Safari/Chrome and use "Add to Home Screen" (same steps as the
+subcontractor app — the page itself shows a hint with instructions). It
+installs as its own icon labeled "Admin," visually marked with a gold badge
+so it doesn't look like the subcontractor app's icon at a glance. Each
+invited person does this on their own phone/browser.
 
 **Forgotten passwords:** no self-service reset flow is built into this app;
 have them ask you to resend an invite (or add Supabase's password-reset
