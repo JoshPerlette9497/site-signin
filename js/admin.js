@@ -1,63 +1,39 @@
-/* ---------- admin gate ----------
-   Not a real access-control boundary — the subcontractor tables have open
-   RLS (they have to, for the zero-setup QR flow), so anyone with the anon
-   key could still query them directly. This just keeps casual visitors to
-   this public repo's admin.html from seeing subcontractor data at a glance.
-   It reuses the SAME access code as the Site Log app's `app_data` table
-   (same Supabase project, already set up there) purely as a "type the code
-   you already know" check, verified with a real write+read round trip. */
-const ADMIN_KEY_STORAGE = 'siteSigninAdminKey';
-function getAdminKey(){ return localStorage.getItem(ADMIN_KEY_STORAGE) || ''; }
-function setAdminKey(key){ localStorage.setItem(ADMIN_KEY_STORAGE, key); }
-function clearAdminKey(){ localStorage.removeItem(ADMIN_KEY_STORAGE); }
-
-async function verifyAdminKey(key){
-  try{
-    const writeRes = await fetch(`${SUPABASE_URL}/rest/v1/app_data`, {
-      method: 'POST',
-      headers: {
-        ...SUPABASE_HEADERS, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates',
-        'x-site-key': key
-      },
-      body: JSON.stringify({key:'__admin_key_check', value: JSON.stringify('ok'), updated_at: new Date().toISOString()})
-    });
-    if(writeRes.status===401 || writeRes.status===403) return 'rejected';
-    if(!writeRes.ok) return 'unknown';
-    return 'ok';
-  }catch(e){ return 'unknown'; }
-}
-
-function promptAdminKeyModal(){
-  return new Promise(resolve=>{
-    showModal(`
-      <h2>Access Code Required</h2>
-      <div class="helptext" style="margin-bottom:8px;">Enter the Site Log access code to view sign-ins and submissions.</div>
-      <input id="adminKeyInput" type="password" autocomplete="off">
-      <button class="btn" id="adminKeyOk" style="width:100%; margin-top:14px;">Continue</button>
-    `);
-    document.getElementById('modalClose').style.display = 'none';
-    document.getElementById('modalBg').onclick = null;
-    const input = document.getElementById('adminKeyInput');
-    input.focus();
-    const submit = ()=>{ const v = input.value.trim(); if(!v) return; closeModal(); resolve(v); };
-    document.getElementById('adminKeyOk').onclick = submit;
-    input.onkeydown = (e)=>{ if(e.key==='Enter') submit(); };
-  });
-}
-
-async function ensureAdminKey(){
-  let key = getAdminKey();
-  while(true){
-    if(key){
-      const result = await verifyAdminKey(key);
-      if(result==='ok' || result==='unknown') return;
-      clearAdminKey();
-      showToast('Access code rejected — try again.');
-      key = null;
+/* ---------- admin login (real Supabase Auth accounts) ----------
+   Josh invites each coworker/boss as their own user in the Supabase
+   dashboard (Authentication -> Users -> Invite user) — see README. This
+   page requires a live session; the subcontractors/site_visits/
+   safety_documents tables' SELECT policies are restricted to the
+   `authenticated` role, so a valid login is what actually gates reads
+   (not just a UI prompt). Revoking someone's access = deleting their user
+   in that same Supabase dashboard screen. */
+function renderLogin(){
+  app.innerHTML = `
+    <div class="card">
+      <div class="helptext">Sign in with the account Josh set up for you to view sign-ins and submitted safety forms.</div>
+    </div>
+    <label>Email</label>
+    <input id="loginEmail" type="email" autocomplete="username">
+    <label>Password</label>
+    <input id="loginPassword" type="password" autocomplete="current-password">
+    <button class="btn" id="loginBtn" style="width:100%; margin-top:18px;">Sign In</button>
+    <div class="helptext" style="margin-top:10px;">No account? Ask Josh to invite you from the Supabase dashboard.</div>
+  `;
+  const submit = async ()=>{
+    const email = document.getElementById('loginEmail').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    if(!email || !password){ showToast('Enter your email and password.'); return; }
+    const btn = document.getElementById('loginBtn');
+    btn.disabled = true; btn.textContent = 'Signing in…';
+    try{
+      await adminSignIn(email, password);
+      renderDashboard();
+    }catch(e){
+      showToast(e.message || 'Could not sign in.');
+      btn.disabled = false; btn.textContent = 'Sign In';
     }
-    key = await promptAdminKeyModal();
-    setAdminKey(key);
-  }
+  };
+  document.getElementById('loginBtn').onclick = submit;
+  document.getElementById('loginPassword').onkeydown = (e)=>{ if(e.key==='Enter') submit(); };
 }
 
 /* ---------- data ---------- */
@@ -67,43 +43,100 @@ const SUB_DOC_TYPES = {
   incident_report: 'Incident Report'
 };
 async function fetchSubVisits(){
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/site_visits?order=sign_in_at.desc&limit=100&select=*`, { headers: SUPABASE_HEADERS });
-  if(!res.ok) throw new Error('site_visits fetch failed: ' + res.status);
-  return res.json();
+  return adminFetch('/rest/v1/site_visits?order=sign_in_at.desc&limit=1000&select=*');
 }
 async function fetchSubDocs(){
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/safety_documents?order=uploaded_at.desc&limit=50&select=*`, { headers: SUPABASE_HEADERS });
-  if(!res.ok) throw new Error('safety_documents fetch failed: ' + res.status);
-  return res.json();
+  return adminFetch('/rest/v1/safety_documents?order=uploaded_at.desc&limit=1000&select=*');
 }
 
-const app = document.getElementById('app');
+function mergeActivity(visits, docs){
+  return [
+    ...visits.map(v=>({ ts: v.sign_in_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed in' })),
+    ...visits.filter(v=>v.sign_out_at).map(v=>({ ts: v.sign_out_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed out' })),
+    ...docs.map(d=>({ ts: d.uploaded_at, name: d.subcontractor_name, company: d.subcontractor_company, label: `Submitted: ${SUB_DOC_TYPES[d.type] || d.type}`, url: d.file_url, notes: d.notes }))
+  ].sort((a,b)=> new Date(b.ts) - new Date(a.ts));
+}
 
-async function render(){
+/* ---------- dashboard ---------- */
+const app = document.getElementById('app');
+let allVisits = [], allDocs = [];
+
+function defaultFromDate(){
+  const d = new Date(); d.setDate(d.getDate() - 30);
+  return d.toISOString().slice(0,10);
+}
+function todayDate(){ return new Date().toISOString().slice(0,10); }
+
+async function renderDashboard(){
+  const session = getAdminSession();
   app.innerHTML = `
+    <div class="card no-print">
+      <div class="row">
+        <div class="item-meta">Signed in as ${escapeHtml(session ? session.email : '')}</div>
+        <a href="#" id="signOutLink">Sign out</a>
+      </div>
+    </div>
+
+    <div class="section-title no-print">Date Range</div>
+    <div class="card no-print">
+      <div style="display:flex; gap:8px;">
+        <div style="flex:1;"><label>From</label><input type="date" id="fromDate" value="${defaultFromDate()}"></div>
+        <div style="flex:1;"><label>To</label><input type="date" id="toDate" value="${todayDate()}"></div>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:10px;">
+        <button class="btn ghost" id="exportCsvBtn" style="flex:1;">Export CSV</button>
+        <button class="btn ghost" id="printBtn" style="flex:1;">Print Report</button>
+      </div>
+    </div>
+
     <div class="section-title">On Site Now</div>
     <div id="onSite"><div class="helptext" style="margin:4px;">Loading…</div></div>
-    <div class="section-title">Recent Activity</div>
+    <div class="section-title">Activity</div>
     <div id="activity"><div class="helptext" style="margin:4px;">Loading…</div></div>
-    <div class="divider"></div>
-    <div class="helptext" style="margin:0 4px;"><a href="#" id="clearKeyLink">Clear saved access code on this device</a></div>
   `;
-  document.getElementById('clearKeyLink').onclick = (e)=>{
+
+  document.getElementById('signOutLink').onclick = async (e)=>{
     e.preventDefault();
-    showConfirm('Clear the saved access code on this device? You will need to re-enter it.', ()=>{
-      clearAdminKey();
-      location.reload();
-    });
+    await adminSignOut();
+    renderLogin();
   };
+  document.getElementById('fromDate').onchange = renderFiltered;
+  document.getElementById('toDate').onchange = renderFiltered;
+  document.getElementById('exportCsvBtn').onclick = exportCSV;
+  document.getElementById('printBtn').onclick = ()=>window.print();
+
   try{
-    const [visits, docs] = await Promise.all([fetchSubVisits(), fetchSubDocs()]);
-    renderOnSite(visits);
-    renderActivity(visits, docs);
+    [allVisits, allDocs] = await Promise.all([fetchSubVisits(), fetchSubDocs()]);
   }catch(e){
     console.error('admin load failed', e);
+    if(String(e.message).includes('signed in') || String(e.message).includes('expired')){
+      showToast('Your session expired — sign in again.');
+      renderLogin();
+      return;
+    }
     document.getElementById('onSite').innerHTML = `<div class="helptext">Couldn't load — check your connection.</div>`;
     document.getElementById('activity').innerHTML = '';
+    return;
   }
+  renderOnSite(allVisits);
+  renderFiltered();
+}
+
+function filteredRange(){
+  const from = document.getElementById('fromDate').value;
+  const to = document.getElementById('toDate').value;
+  const fromTs = from ? new Date(from + 'T00:00:00').getTime() : -Infinity;
+  const toTs = to ? new Date(to + 'T23:59:59').getTime() : Infinity;
+  return { fromTs, toTs };
+}
+
+function renderFiltered(){
+  const { fromTs, toTs } = filteredRange();
+  const items = mergeActivity(allVisits, allDocs).filter(it=>{
+    const t = new Date(it.ts).getTime();
+    return t >= fromTs && t <= toTs;
+  });
+  renderActivity(items);
 }
 
 function renderOnSite(visits){
@@ -123,21 +156,15 @@ function renderOnSite(visits){
   `).join('');
 }
 
-function renderActivity(visits, docs){
-  const items = [
-    ...visits.map(v=>({ ts: v.sign_in_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed in' })),
-    ...visits.filter(v=>v.sign_out_at).map(v=>({ ts: v.sign_out_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed out' })),
-    ...docs.map(d=>({ ts: d.uploaded_at, name: d.subcontractor_name, company: d.subcontractor_company, label: `Submitted: ${SUB_DOC_TYPES[d.type] || d.type}`, url: d.file_url, notes: d.notes }))
-  ].sort((a,b)=> new Date(b.ts) - new Date(a.ts)).slice(0, 60);
-
+function renderActivity(items){
   const el = document.getElementById('activity');
-  if(!items.length){ el.innerHTML = `<div class="empty">No sign-ins or submissions yet.</div>`; return; }
+  if(!items.length){ el.innerHTML = `<div class="empty">No sign-ins or submissions in this range.</div>`; return; }
   el.innerHTML = items.map(it=>`
     <div class="card">
       <div class="row">
         <div>
           <div style="font-weight:700;">${escapeHtml(it.name || 'Unknown')}</div>
-          <div class="item-meta">${escapeHtml(it.company || '')} · ${it.label}</div>
+          <div class="item-meta">${escapeHtml(it.company || '')} · ${escapeHtml(it.label)}</div>
           ${it.notes ? `<div class="item-meta">${escapeHtml(it.notes)}</div>` : ''}
         </div>
         <div class="item-meta" style="text-align:right; white-space:nowrap;">${new Date(it.ts).toLocaleString('en-US',{month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}</div>
@@ -147,7 +174,38 @@ function renderActivity(visits, docs){
   `).join('');
 }
 
+/* ---------- CSV export ---------- */
+function toCSV(items){
+  const header = ['Timestamp', 'Name', 'Company', 'Action', 'Notes', 'File URL'];
+  const rows = items.map(it => [
+    new Date(it.ts).toLocaleString('en-US'), it.name || '', it.company || '', it.label, it.notes || '', it.url || ''
+  ]);
+  const escapeCell = v => `"${String(v).replace(/"/g, '""')}"`;
+  return [header, ...rows].map(r => r.map(escapeCell).join(',')).join('\r\n');
+}
+function exportCSV(){
+  const { fromTs, toTs } = filteredRange();
+  const items = mergeActivity(allVisits, allDocs).filter(it=>{
+    const t = new Date(it.ts).getTime();
+    return t >= fromTs && t <= toTs;
+  });
+  if(!items.length){ showToast('Nothing to export in this range.'); return; }
+  const from = document.getElementById('fromDate').value, to = document.getElementById('toDate').value;
+  const csv = toCSV(items);
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `site-signin-${from}_to_${to}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/* ---------- init ---------- */
 (async function init(){
-  await ensureAdminKey();
-  render();
+  const session = getAdminSession();
+  if(session){
+    const fresh = await ensureFreshAdminSession();
+    if(fresh){ renderDashboard(); return; }
+  }
+  renderLogin();
 })();

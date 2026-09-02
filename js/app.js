@@ -90,6 +90,8 @@ async function renderHome(){
     e.preventDefault();
     showConfirm('Switch to a different profile on this phone? Your saved info here will be cleared.', ()=>{
       clearProfile();
+      clearCurrentVisit();
+      localStorage.removeItem('subActivityLog');
       renderSetup();
     });
   };
@@ -101,23 +103,16 @@ async function renderHome(){
   refreshActivity();
 }
 
-let currentOpenVisit = null;
-
-async function refreshStatus(){
+/* Status and activity are tracked locally on the phone (see js/storage.js)
+   rather than read back from Supabase — reads now require an authenticated
+   (admin) session, which the subcontractor app intentionally never has. */
+function refreshStatus(){
   const profile = getProfile();
   const el = document.getElementById('statusCard');
-  try{
-    currentOpenVisit = await fetchOpenVisit(profile.id);
-  }catch(e){
-    console.error(e);
-    el.innerHTML = `<div class="helptext">Couldn't check your status — check your connection.</div>
-      <button class="btn stack" id="retryStatus">Retry</button>`;
-    document.getElementById('retryStatus').onclick = refreshStatus;
-    return;
-  }
-  if(currentOpenVisit){
+  const openVisit = getCurrentVisit();
+  if(openVisit){
     el.className = 'card status-in';
-    const t = new Date(currentOpenVisit.sign_in_at).toLocaleTimeString('en-US',{hour:'numeric', minute:'2-digit'});
+    const t = new Date(openVisit.sign_in_at).toLocaleTimeString('en-US',{hour:'numeric', minute:'2-digit'});
     el.innerHTML = `
       <div style="font-weight:700;">Signed in at ${t}</div>
       <button class="btn danger stack" id="signOutBtn">Sign Out</button>
@@ -126,9 +121,9 @@ async function refreshStatus(){
       const btn = document.getElementById('signOutBtn');
       btn.disabled = true; btn.textContent = 'Signing out…';
       try{
-        await signOut(currentOpenVisit.id);
+        await signOut(openVisit.id);
         showToast('Signed out. Have a safe trip home.');
-        await refreshStatus();
+        refreshStatus();
         refreshActivity();
       }catch(e){
         console.error(e);
@@ -148,7 +143,7 @@ async function refreshStatus(){
       try{
         await signIn(profile);
         showToast('Signed in. Have a safe day on site.');
-        await refreshStatus();
+        refreshStatus();
         refreshActivity();
       }catch(e){
         console.error(e);
@@ -159,23 +154,9 @@ async function refreshStatus(){
   }
 }
 
-async function refreshActivity(){
-  const profile = getProfile();
+function refreshActivity(){
   const el = document.getElementById('recentActivity');
-  let visits = [], docs = [];
-  try{
-    ({visits, docs} = await fetchRecentActivity(profile.id));
-  }catch(e){
-    console.error(e);
-    el.innerHTML = `<div class="helptext">Couldn't load recent activity.</div>`;
-    return;
-  }
-  const items = [
-    ...visits.map(v=>({ ts: v.sign_in_at, label: 'Signed in' })),
-    ...visits.filter(v=>v.sign_out_at).map(v=>({ ts: v.sign_out_at, label: 'Signed out' })),
-    ...docs.map(d=>({ ts: d.uploaded_at, label: `Submitted: ${DOC_TYPES[d.type] || d.type}` }))
-  ].sort((a,b)=> new Date(b.ts) - new Date(a.ts)).slice(0, 8);
-
+  const items = getActivityLog().slice(0, 8);
   if(!items.length){ el.innerHTML = `<div class="empty">No activity yet on this site.</div>`; return; }
   el.innerHTML = items.map(it=>`
     <div class="activity-item">
@@ -216,7 +197,7 @@ function openSubmitModal(type){
     btn.disabled = true; btn.textContent = 'Uploading…';
     try{
       const fileUrl = await uploadDocFile(file);
-      await submitDocument(profile, type, fileUrl, notes);
+      await submitDocument(profile, type, fileUrl, notes, DOC_TYPES[type]);
       closeModal();
       showToast(`${DOC_TYPES[type]} submitted.`);
       refreshActivity();
