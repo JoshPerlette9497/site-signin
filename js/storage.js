@@ -63,11 +63,21 @@ async function createSubcontractor(profile){
 }
 
 /* ---------- site visits (sign in / sign out) ---------- */
-async function signIn(profile){
+/* `form` carries the daily sign-in questionnaire (see js/app.js
+   openSignInForm): crewCount, crewNames, hadOrientation, musterPoint,
+   fitForWork, signatureType ('drawn'|'typed'), signatureText,
+   signatureFileUrl. Requires the site_visits columns added by the
+   migration in README — see "Daily sign-in form" there. */
+async function signIn(profile, form){
   const visit = {
     id: uid(), subcontractor_id: profile.id,
     subcontractor_name: profile.name, subcontractor_company: profile.company || null,
-    sign_in_at: new Date().toISOString(), sign_out_at: null
+    sign_in_at: new Date().toISOString(), sign_out_at: null,
+    crew_count: form.crewCount, crew_names: form.crewNames,
+    had_orientation: form.hadOrientation, muster_point: form.musterPoint,
+    fit_for_work: form.fitForWork,
+    signature_type: form.signatureType, signature_text: form.signatureText,
+    signature_file_url: form.signatureFileUrl
   };
   const res = await fetch(`${SUPABASE_URL}/rest/v1/site_visits`, {
     method: 'POST',
@@ -76,7 +86,7 @@ async function signIn(profile){
   });
   if(!res.ok) throw new Error(`Sign-in failed (${res.status})`);
   setCurrentVisit({ id: visit.id, sign_in_at: visit.sign_in_at });
-  pushActivityLog({ ts: visit.sign_in_at, label: 'Signed in' });
+  pushActivityLog({ ts: visit.sign_in_at, label: `Signed in — crew of ${form.crewCount}` });
 }
 async function signOut(visitId){
   const signOutAt = new Date().toISOString();
@@ -88,6 +98,18 @@ async function signOut(visitId){
   if(!res.ok) throw new Error(`Sign-out failed (${res.status})`);
   clearCurrentVisit();
   pushActivityLog({ ts: signOutAt, label: 'Signed out' });
+}
+
+/* ---------- signature upload (drawn signature from the sign-in form) ---------- */
+async function uploadSignatureBlob(blob){
+  const path = `signatures/${new Date().toISOString().slice(0,10)}/${uid()}.png`;
+  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${DOCS_BUCKET}/${path}`, {
+    method: 'POST',
+    headers: { ...SUPABASE_HEADERS, 'Content-Type': 'image/png' },
+    body: blob
+  });
+  if(!res.ok) throw new Error(`Signature upload failed (${res.status})`);
+  return `${SUPABASE_URL}/storage/v1/object/public/${DOCS_BUCKET}/${path}`;
 }
 
 /* ---------- safety document submissions ---------- */

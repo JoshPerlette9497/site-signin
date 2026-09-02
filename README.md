@@ -11,7 +11,8 @@ files. It only shares the same Supabase project as its data backend (by
 choice, to avoid provisioning a second one), in its own tables.
 
 ## What it does
-- **Sign in / sign out** of the site, timestamped.
+- **Sign in** — a mandatory daily questionnaire (see "Daily sign-in form"
+  below) plus a signature, then timestamped. **Sign out** is a single tap.
 - **Submit a form**: Hazard Assessment, Equipment Operation Certificate, or
   Incident Report — photographed or scanned from the phone, uploaded
   straight from the browser (`<input capture="environment">` opens the
@@ -110,6 +111,58 @@ Then **Storage → New bucket** named exactly `safety-submissions`, set to
 bucket — the anon key is already public by design; this isn't a new
 exposure, and it's what lets `admin.html`'s "View submitted file" links
 work with a plain URL).
+
+### Migration: daily sign-in form columns
+The sign-in flow now collects a full daily questionnaire + signature (see
+below), stored on `site_visits`. Run this once, in addition to the table
+above (safe to run even if you already ran the original `create table` —
+`add column if not exists` won't touch existing rows):
+
+```sql
+alter table site_visits
+  add column if not exists crew_count integer,
+  add column if not exists crew_names text,
+  add column if not exists had_orientation boolean,
+  add column if not exists muster_point text,
+  add column if not exists fit_for_work boolean,
+  add column if not exists signature_type text, -- 'drawn' | 'typed'
+  add column if not exists signature_text text,
+  add column if not exists signature_file_url text;
+```
+
+No new bucket needed — drawn signatures upload into the same
+`safety-submissions` bucket, under a `signatures/` folder.
+
+## Daily sign-in form
+Tapping **Sign In** now opens a required questionnaire before the sign-in
+is recorded:
+- How many workers are on the crew today (number)
+- First and last names of all crew members (free text)
+- Whether they've received orientation on this site (Yes/No) — recorded,
+  does not block sign-in on its own
+- Where the muster point is located — **Site Office** or **81st Street SW**.
+  **81st Street SW is the only correct answer.** Choosing Site Office shows
+  a red warning and blocks sign-in until corrected — the intent being that
+  someone who doesn't know the real muster point needs a site orientation
+  from their supervisor before they start work, not just an app screen.
+- A fit-for-work / site-rules acknowledgment (Yes/No). **Choosing "No" also
+  blocks sign-in**, with a message pointing them to their supervisor —
+  this was my judgment call (not explicitly specified), on the reasoning
+  that an acknowledgment someone can decline and still sign in isn't really
+  an acknowledgment. Easy to change to non-blocking (just recorded) if
+  that's not what you want — say the word.
+- A signature — draw with a finger/stylus on a canvas, or tap "Type
+  instead" for a typed name. Drawn signatures upload as a PNG to Storage;
+  typed ones are stored as plain text. Both are shown/exportable from
+  `admin.html`.
+
+All of this is stored per sign-in on `site_visits` and surfaced in
+`admin.html`'s activity feed and CSV export, so a specific day's crew
+count, names, orientation/fit-for-work answers, and signature are all part
+of the audit record — not just "so-and-so signed in at 7:03am."
+
+Sign-out stays a single tap — no questionnaire, since the crew/orientation
+info doesn't change mid-day.
 
 Until these exist, `index.html` loads fine but every sign-in/sign-out and
 form submission fails with a toast — nothing else breaks.

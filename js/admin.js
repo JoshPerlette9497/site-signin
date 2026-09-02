@@ -49,9 +49,16 @@ async function fetchSubDocs(){
   return adminFetch('/rest/v1/safety_documents?order=uploaded_at.desc&limit=1000&select=*');
 }
 
+const MUSTER_LABELS = { site_office: 'Site Office', '81st_street': '81st Street SW' };
+
 function mergeActivity(visits, docs){
   return [
-    ...visits.map(v=>({ ts: v.sign_in_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed in' })),
+    ...visits.map(v=>({
+      ts: v.sign_in_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed in',
+      crewCount: v.crew_count, crewNames: v.crew_names, hadOrientation: v.had_orientation,
+      musterPoint: v.muster_point, fitForWork: v.fit_for_work,
+      signatureType: v.signature_type, signatureText: v.signature_text, signatureUrl: v.signature_file_url
+    })),
     ...visits.filter(v=>v.sign_out_at).map(v=>({ ts: v.sign_out_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed out' })),
     ...docs.map(d=>({ ts: d.uploaded_at, name: d.subcontractor_name, company: d.subcontractor_company, label: `Submitted: ${SUB_DOC_TYPES[d.type] || d.type}`, url: d.file_url, notes: d.notes }))
   ].sort((a,b)=> new Date(b.ts) - new Date(a.ts));
@@ -166,6 +173,10 @@ function renderActivity(items){
           <div style="font-weight:700;">${escapeHtml(it.name || 'Unknown')}</div>
           <div class="item-meta">${escapeHtml(it.company || '')} · ${escapeHtml(it.label)}</div>
           ${it.notes ? `<div class="item-meta">${escapeHtml(it.notes)}</div>` : ''}
+          ${it.crewCount != null ? `<div class="item-meta">Crew of ${it.crewCount}: ${escapeHtml(it.crewNames || '')}</div>` : ''}
+          ${it.hadOrientation != null ? `<div class="item-meta">Orientation: ${it.hadOrientation ? 'Yes' : 'No'} · Muster point: ${escapeHtml(MUSTER_LABELS[it.musterPoint] || it.musterPoint || '')} · Fit for work: ${it.fitForWork ? 'Yes' : 'No'}</div>` : ''}
+          ${it.signatureType === 'typed' ? `<div class="item-meta">Signature: <em>${escapeHtml(it.signatureText || '')}</em></div>` : ''}
+          ${it.signatureType === 'drawn' && it.signatureUrl ? `<div class="item-meta">Signature: <a href="${escapeHtml(it.signatureUrl)}" target="_blank">view</a></div>` : ''}
         </div>
         <div class="item-meta" style="text-align:right; white-space:nowrap;">${new Date(it.ts).toLocaleString('en-US',{month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}</div>
       </div>
@@ -176,9 +187,19 @@ function renderActivity(items){
 
 /* ---------- CSV export ---------- */
 function toCSV(items){
-  const header = ['Timestamp', 'Name', 'Company', 'Action', 'Notes', 'File URL'];
+  const header = [
+    'Timestamp', 'Name', 'Company', 'Action',
+    'Crew Count', 'Crew Names', 'Orientation', 'Muster Point', 'Fit For Work', 'Signature',
+    'Notes', 'File URL'
+  ];
   const rows = items.map(it => [
-    new Date(it.ts).toLocaleString('en-US'), it.name || '', it.company || '', it.label, it.notes || '', it.url || ''
+    new Date(it.ts).toLocaleString('en-US'), it.name || '', it.company || '', it.label,
+    it.crewCount ?? '', it.crewNames || '',
+    it.hadOrientation == null ? '' : (it.hadOrientation ? 'Yes' : 'No'),
+    MUSTER_LABELS[it.musterPoint] || it.musterPoint || '',
+    it.fitForWork == null ? '' : (it.fitForWork ? 'Yes' : 'No'),
+    it.signatureType === 'typed' ? it.signatureText : (it.signatureType === 'drawn' ? it.signatureUrl : ''),
+    it.notes || '', it.url || ''
   ]);
   const escapeCell = v => `"${String(v).replace(/"/g, '""')}"`;
   return [header, ...rows].map(r => r.map(escapeCell).join(',')).join('\r\n');

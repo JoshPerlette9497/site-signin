@@ -8,15 +8,49 @@ const DOC_TYPES = {
   equipment_cert: 'Equipment Operation Certificate',
   incident_report: 'Incident Report'
 };
+const CORRECT_MUSTER_POINT = '81st_street';
 
 function setHeader(sub){
   document.getElementById('headerSub').textContent = sub;
+}
+
+/* ---------- add-to-home-screen hint ---------- */
+function isStandalone(){
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+function isIOS(){
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+}
+function installHintHtml(){
+  if(isStandalone() || localStorage.getItem('installHintDismissed')) return '';
+  const steps = isIOS()
+    ? 'Tap the <strong>Share</strong> icon, then <strong>Add to Home Screen</strong>.'
+    : 'Tap the <strong>⋮</strong> menu, then <strong>Add to Home screen</strong> (or <strong>Install app</strong>).';
+  return `
+    <div class="card install-hint" id="installHint">
+      <div class="row">
+        <div>
+          <div style="font-weight:700;">Add this to your Home Screen</div>
+          <div class="item-meta">${steps} Next time you won't need to rescan the QR code.</div>
+        </div>
+        <button class="btn ghost small" id="installHintDismiss">×</button>
+      </div>
+    </div>
+  `;
+}
+function wireInstallHint(){
+  const dismiss = document.getElementById('installHintDismiss');
+  if(dismiss) dismiss.onclick = ()=>{
+    localStorage.setItem('installHintDismissed', '1');
+    document.getElementById('installHint').remove();
+  };
 }
 
 /* ---------- setup (one-time profile) ---------- */
 function renderSetup(){
   setHeader('Quick one-time setup');
   app.innerHTML = `
+    ${installHintHtml()}
     <div class="card">
       <div class="helptext">This only takes a moment. Your info is saved on this phone, so you won't have to enter it again on future visits.</div>
     </div>
@@ -54,6 +88,7 @@ function renderSetup(){
       btn.disabled = false; btn.textContent = 'Continue';
     }
   };
+  wireInstallHint();
 }
 
 /* ---------- home ---------- */
@@ -61,6 +96,7 @@ async function renderHome(){
   const profile = getProfile();
   setHeader(`Welcome back, ${profile.name.split(' ')[0]}`);
   app.innerHTML = `
+    ${installHintHtml()}
     <div class="card">
       <div class="row">
         <div>
@@ -98,6 +134,7 @@ async function renderHome(){
   document.querySelectorAll('[data-doctype]').forEach(btn=>{
     btn.onclick = ()=>openSubmitModal(btn.dataset.doctype);
   });
+  wireInstallHint();
 
   refreshStatus();
   refreshActivity();
@@ -137,20 +174,7 @@ function refreshStatus(){
       <div style="font-weight:700;">Not signed in</div>
       <button class="btn stack" id="signInBtn">Sign In</button>
     `;
-    document.getElementById('signInBtn').onclick = async ()=>{
-      const btn = document.getElementById('signInBtn');
-      btn.disabled = true; btn.textContent = 'Signing in…';
-      try{
-        await signIn(profile);
-        showToast('Signed in. Have a safe day on site.');
-        refreshStatus();
-        refreshActivity();
-      }catch(e){
-        console.error(e);
-        showToast("Couldn't sign in — check your connection and try again.");
-        btn.disabled = false; btn.textContent = 'Sign In';
-      }
-    };
+    document.getElementById('signInBtn').onclick = ()=>openSignInForm(profile);
   }
 }
 
@@ -164,6 +188,171 @@ function refreshActivity(){
       <div class="when">${new Date(it.ts).toLocaleString('en-US',{month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}</div>
     </div>
   `).join('');
+}
+
+/* ---------- daily sign-in form ---------- */
+function openSignInForm(profile){
+  showModal(`
+    <h2>Daily Sign-In</h2>
+    <div class="helptext" style="margin-bottom:6px;">Complete this each time you sign in for the day.</div>
+
+    <label>How many workers are on your crew today? *</label>
+    <input id="siCrewCount" type="number" min="1" inputmode="numeric" placeholder="e.g. 4">
+
+    <label>First and last names of all crew members *</label>
+    <textarea id="siCrewNames" placeholder="One name per line"></textarea>
+
+    <label>Have I received orientation on this site? *</label>
+    <div class="radio-row">
+      <label class="radio-opt"><input type="radio" name="siOrientation" value="yes"> Yes</label>
+      <label class="radio-opt"><input type="radio" name="siOrientation" value="no"> No</label>
+    </div>
+
+    <label>Where is the muster point located? *</label>
+    <div class="radio-row">
+      <label class="radio-opt"><input type="radio" name="siMuster" value="site_office"> Site Office</label>
+      <label class="radio-opt"><input type="radio" name="siMuster" value="81st_street"> 81st Street SW</label>
+    </div>
+    <div id="siMusterWarning" class="warning-box" style="display:none;">
+      That's not correct. The muster point is <strong>81st Street SW</strong>. Please complete a site orientation with your supervisor before signing in.
+    </div>
+
+    <label>I acknowledge that I am "fit for work" on arrival to site and will comply with all site rules as laid out by the General Contractor *</label>
+    <div class="radio-row">
+      <label class="radio-opt"><input type="radio" name="siFit" value="yes"> Yes</label>
+      <label class="radio-opt"><input type="radio" name="siFit" value="no"> No</label>
+    </div>
+    <div id="siFitWarning" class="warning-box" style="display:none;">
+      You can't sign in without confirming this. If you're not fit for work today, please speak with your site supervisor before entering the site.
+    </div>
+
+    <label>Signature *</label>
+    <div class="sig-toggle"><a href="#" id="sigToggleType">Type instead</a></div>
+    <div id="sigDrawWrap">
+      <canvas id="sigCanvas" class="sig-canvas"></canvas>
+      <button class="btn ghost small" id="sigClearBtn" style="margin-top:6px;">Clear</button>
+    </div>
+    <div id="sigTypeWrap" style="display:none;">
+      <input id="sigTypedInput" type="text" placeholder="Type your full name" class="sig-typed-input">
+      <div class="sig-toggle"><a href="#" id="sigToggleDraw">Draw instead</a></div>
+    </div>
+
+    <button class="btn" id="siSubmitBtn" style="width:100%; margin-top:16px;">Complete Sign-In</button>
+  `);
+
+  const canvas = setupSignatureCanvas();
+  document.getElementById('sigClearBtn').onclick = ()=>canvas.clearSig();
+  document.getElementById('sigToggleType').onclick = (e)=>{
+    e.preventDefault();
+    document.getElementById('sigDrawWrap').style.display = 'none';
+    document.getElementById('sigTypeWrap').style.display = 'block';
+    document.getElementById('sigTypedInput').focus();
+  };
+  document.getElementById('sigToggleDraw').onclick = (e)=>{
+    e.preventDefault();
+    document.getElementById('sigTypeWrap').style.display = 'none';
+    document.getElementById('sigDrawWrap').style.display = 'block';
+  };
+  document.querySelectorAll('input[name="siMuster"]').forEach(r=>{
+    r.onchange = ()=>{ document.getElementById('siMusterWarning').style.display = 'none'; };
+  });
+  document.querySelectorAll('input[name="siFit"]').forEach(r=>{
+    r.onchange = ()=>{ document.getElementById('siFitWarning').style.display = 'none'; };
+  });
+
+  document.getElementById('siSubmitBtn').onclick = ()=>submitSignInForm(profile, canvas);
+}
+
+/* Pointer-event canvas signature pad — works with touch, mouse, and stylus. */
+function setupSignatureCanvas(){
+  const canvas = document.getElementById('sigCanvas');
+  const ctx = canvas.getContext('2d');
+  const ratio = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * ratio;
+  canvas.height = rect.height * ratio;
+  ctx.scale(ratio, ratio);
+  ctx.lineWidth = 2.2;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = '#1B2B2C';
+
+  let drawing = false, hasStrokes = false, lastX = 0, lastY = 0;
+  const pos = (e)=>{
+    const r = canvas.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  };
+  canvas.addEventListener('pointerdown', (e)=>{
+    drawing = true; hasStrokes = true;
+    const p = pos(e); lastX = p.x; lastY = p.y;
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', (e)=>{
+    if(!drawing) return;
+    const p = pos(e);
+    ctx.beginPath(); ctx.moveTo(lastX, lastY); ctx.lineTo(p.x, p.y); ctx.stroke();
+    lastX = p.x; lastY = p.y;
+  });
+  const stop = ()=>{ drawing = false; };
+  canvas.addEventListener('pointerup', stop);
+  canvas.addEventListener('pointerleave', stop);
+  canvas.hasStrokes = ()=>hasStrokes;
+  canvas.clearSig = ()=>{ ctx.clearRect(0, 0, canvas.width, canvas.height); hasStrokes = false; };
+  return canvas;
+}
+
+async function submitSignInForm(profile, canvas){
+  const crewCount = document.getElementById('siCrewCount').value.trim();
+  const crewNames = document.getElementById('siCrewNames').value.trim();
+  const orientation = document.querySelector('input[name="siOrientation"]:checked');
+  const muster = document.querySelector('input[name="siMuster"]:checked');
+  const fit = document.querySelector('input[name="siFit"]:checked');
+  const typing = document.getElementById('sigTypeWrap').style.display !== 'none';
+  const typedSig = document.getElementById('sigTypedInput').value.trim();
+
+  if(!crewCount || Number(crewCount) < 1){ showToast('Enter how many workers are on your crew today.'); return; }
+  if(!crewNames){ showToast('Enter the names of all crew members.'); return; }
+  if(!orientation){ showToast("Answer whether you've received orientation on this site."); return; }
+  if(!muster){ showToast('Select where the muster point is located.'); return; }
+  if(muster.value !== CORRECT_MUSTER_POINT){
+    document.getElementById('siMusterWarning').style.display = 'block';
+    return;
+  }
+  if(!fit){ showToast('Answer the fit-for-work acknowledgment.'); return; }
+  if(fit.value !== 'yes'){
+    document.getElementById('siFitWarning').style.display = 'block';
+    return;
+  }
+  if(!typing && !canvas.hasStrokes()){ showToast('Sign in the box, or tap "Type instead."'); return; }
+  if(typing && !typedSig){ showToast('Type your name to sign.'); return; }
+
+  const btn = document.getElementById('siSubmitBtn');
+  btn.disabled = true; btn.textContent = 'Signing in…';
+  try{
+    let signatureType, signatureText = null, signatureFileUrl = null;
+    if(typing){
+      signatureType = 'typed'; signatureText = typedSig;
+    } else {
+      signatureType = 'drawn';
+      const blob = await new Promise(resolve=>canvas.toBlob(resolve, 'image/png'));
+      signatureFileUrl = await uploadSignatureBlob(blob);
+    }
+    await signIn(profile, {
+      crewCount: Number(crewCount), crewNames,
+      hadOrientation: orientation.value === 'yes',
+      musterPoint: muster.value,
+      fitForWork: fit.value === 'yes',
+      signatureType, signatureText, signatureFileUrl
+    });
+    closeModal();
+    showToast('Signed in. Have a safe day on site.');
+    refreshStatus();
+    refreshActivity();
+  }catch(e){
+    console.error(e);
+    showToast("Couldn't sign in — check your connection and try again.");
+    btn.disabled = false; btn.textContent = 'Complete Sign-In';
+  }
 }
 
 /* ---------- submit hazard assessment / cert / incident report ---------- */

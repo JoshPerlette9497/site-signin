@@ -66,3 +66,21 @@ label{font-size:11px; text-transform:uppercase; letter-spacing:0.5px; color:var(
 .file-preview{width:100%; max-height:220px; object-fit:contain; border-radius:8px; border:1px solid var(--line); margin-top:10px; display:block;}
 .empty{color:var(--ink-dim); font-size:13px; padding:16px 4px; text-align:center;}
 a{color:var(--brand-dark);}
+.install-hint{border-color:var(--brand);}
+.btn.small{padding:4px 10px; font-size:16px; line-height:1; flex-shrink:0;}
+.radio-row{display:flex; gap:16px; margin-top:8px;}
+.radio-opt{
+  display:flex; align-items:center; gap:6px; font-size:14px;
+  text-transform:none; letter-spacing:0; color:var(--ink); font-weight:400; margin-top:0;
+}
+.radio-opt input{width:auto; margin-top:0;}
+.warning-box{
+  margin-top:8px; padding:10px 12px; border-radius:8px; background:#FBEEE8; border:1px solid var(--stamp-red);
+  color:var(--stamp-red); font-size:13px; line-height:1.5; font-weight:600;
+}
+.sig-canvas{
+  width:100%; height:150px; border:1px solid var(--line); border-radius:8px; background:#fff; margin-top:6px;
+  touch-action:none; display:block;
+}
+.sig-typed-input{font-family:"Snell Roundhand","Brush Script MT",cursive; font-size:26px; margin-top:6px;}
+.sig-toggle{margin-top:6px; font-size:12px;}
