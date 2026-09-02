@@ -14,6 +14,45 @@
    only adds the Admin-tab rendering; js/app.js's tab-click handler decides
    when to call renderAdminTab(). */
 
+/* ---------- invite / password-reset landing screen ----------
+   Reached via initApp() in js/app.js when the page loads with an
+   access_token in the URL hash (from a Supabase invite or password-reset
+   email) — see parseAuthCallbackHash() in js/storage.js. */
+function renderSetPasswordForm(callback){
+  setHeader(callback.type === 'invite' ? 'Set your admin password' : 'Reset your password');
+  app.innerHTML = `
+    <div class="card">
+      <div class="helptext">${callback.type === 'invite'
+        ? "You're setting up admin access for the first time — choose a password you'll use to sign in from now on."
+        : 'Choose a new password.'}</div>
+    </div>
+    <label>New Password</label>
+    <input id="newPassword" type="password" autocomplete="new-password">
+    <label>Confirm Password</label>
+    <input id="confirmPassword" type="password" autocomplete="new-password">
+    <button class="btn" id="setPasswordBtn" style="width:100%; margin-top:18px;">Set Password &amp; Continue</button>
+  `;
+  document.getElementById('setPasswordBtn').onclick = async ()=>{
+    const p1 = document.getElementById('newPassword').value;
+    const p2 = document.getElementById('confirmPassword').value;
+    if(!p1 || p1.length < 6){ showToast('Password must be at least 6 characters.'); return; }
+    if(p1 !== p2){ showToast('Passwords do not match.'); return; }
+    const btn = document.getElementById('setPasswordBtn');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try{
+      const user = await setAdminPassword(callback.accessToken, p1);
+      const expiresAt = Math.floor(Date.now() / 1000) + callback.expiresIn;
+      saveAdminSession({ access_token: callback.accessToken, refresh_token: callback.refreshToken, expires_at: expiresAt, email: user && user.email });
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      showToast('Password set. Welcome in.');
+      renderAdminDashboard();
+    }catch(e){
+      showToast(e.message || 'Could not set password.');
+      btn.disabled = false; btn.textContent = 'Set Password & Continue';
+    }
+  };
+}
+
 async function renderAdminTab(){
   const session = getAdminSession();
   if(session){

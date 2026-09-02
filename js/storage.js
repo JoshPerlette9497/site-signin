@@ -165,6 +165,43 @@ function getAdminSession(){
 function saveAdminSession(session){ localStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(session)); }
 function clearAdminSession(){ localStorage.removeItem(ADMIN_SESSION_KEY); }
 
+/* ---------- invite / password-reset link handling ----------
+   Supabase's "Invite user" and "reset password" emails link to
+   `{Site URL}/#access_token=...&refresh_token=...&type=invite|recovery`
+   (the Site URL is set in the Supabase dashboard under Authentication ->
+   URL Configuration — it must be this app's real URL, or the email link
+   goes nowhere). This app doesn't have a router, so it just reads that
+   hash straight off window.location on load — see initApp() in
+   js/app.js. */
+function parseAuthCallbackHash(){
+  const raw = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
+  if(!raw) return null;
+  const params = new URLSearchParams(raw);
+  const accessToken = params.get('access_token');
+  const type = params.get('type');
+  if(!accessToken || (type !== 'invite' && type !== 'recovery')) return null;
+  return {
+    accessToken,
+    refreshToken: params.get('refresh_token'),
+    expiresIn: Number(params.get('expires_in') || 3600),
+    type
+  };
+}
+
+/* Sets the password for whoever the access_token belongs to (from the
+   invite/recovery link above), using it as the auth for the request —
+   this is how a brand-new invited user gets to actually choose a
+   password, since Supabase doesn't set one for them. */
+async function setAdminPassword(accessToken, newPassword){
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    method: 'PUT',
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: newPassword })
+  });
+  if(!res.ok) throw await apiError('Set password', res);
+  return res.json();
+}
+
 async function adminSignIn(email, password){
   const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
     method: 'POST',

@@ -186,17 +186,30 @@ so without a valid login the data cannot be read back at all — not even by
 someone with the anon key inspecting network requests.
 
 **Setup (one time, in the Supabase dashboard):**
-1. **Authentication → Providers → Email** — confirm Email is enabled
+1. **Authentication → URL Configuration → Site URL** — set this to
+   `https://joshperlette9497.github.io/site-signin/` (the real deployed
+   URL). **This is required before inviting anyone** — invite and
+   password-reset emails link to `{Site URL}/#access_token=...`, so if
+   Site URL is still the Supabase default (often a placeholder like
+   `http://localhost:3000`), the link in the email goes nowhere and looks
+   broken/won't load, even though the invite itself succeeded. While
+   you're there, also add that same URL under **Redirect URLs** if it
+   isn't already covered.
+2. **Authentication → Providers → Email** — confirm Email is enabled
    (on by default).
-2. **Authentication → Settings → User Signups → disable "Allow new users to
+3. **Authentication → Settings → User Signups → disable "Allow new users to
    sign up."** This is important: if public signup stays on, *anyone* could
    create their own account and read the data, defeating the point of
    locking reads to `authenticated`. Only admin-invited accounts should
    exist.
-3. **Authentication → Users → Add user → Invite user** — do this once for
+4. **Authentication → Users → Add user → Invite user** — do this once for
    yourself and once per coworker/boss who needs access. Each person gets
-   an email with a link to set their own password; after that they sign
-   into the Admin tab with their email + that password.
+   an email with a link; opening it lands them on this app's **Admin** tab
+   with a "Set your password" screen (`js/admin-view.js`:
+   `renderSetPasswordForm`, triggered by the `access_token` in the link's
+   URL fragment — see `parseAuthCallbackHash()` in `js/storage.js`). After
+   they set one, they're signed in immediately, and use that email +
+   password to log into the Admin tab going forward.
 
 **Revoking access:** delete the person's user in that same Authentication →
 Users screen. Immediate — their session stops being able to read data next
@@ -210,9 +223,10 @@ who opens the app sees that tab, including subcontractors — tapping it just
 gets them the same login screen, which they can't get past without an
 invited account. That's the actual boundary, not the tab's visibility.
 
-**Forgotten passwords:** no self-service reset flow is built into this app;
-have them ask you to resend an invite (or add Supabase's password-reset
-email flow later if this comes up often).
+**Forgotten passwords:** in the Supabase dashboard, Authentication → Users
+→ find their row → send a password-reset email (or delete + re-invite if
+your dashboard version doesn't expose a direct reset button). It opens the
+same "Set your password" screen as a first-time invite.
 
 ## Reviewing records / audits
 The Admin tab, once logged in, shows:

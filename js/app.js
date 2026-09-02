@@ -382,12 +382,23 @@ function openSubmitModal(type){
   };
 }
 
-/* ---------- init ---------- */
-(async function init(){
+/* ---------- init ----------
+   Not auto-invoked here — called from index.html after js/admin-view.js
+   has also loaded, since an invite/reset link (parseAuthCallbackHash,
+   renderSetPasswordForm — both in js/admin-view.js) needs to be checked
+   before deciding whether to show the normal Sign In flow. */
+async function initApp(){
+  const callback = parseAuthCallbackHash();
+  if(callback){
+    document.querySelectorAll('nav.tabs button').forEach(x=>x.classList.remove('active'));
+    document.querySelector('nav.tabs button[data-tab="admin"]').classList.add('active');
+    renderSetPasswordForm(callback);
+    return;
+  }
   const profile = getProfile();
   if(profile) await renderHome();
   else renderSetup();
-})();
+}
 
 if('serviceWorker' in navigator){
   window.addEventListener('load', ()=>{
