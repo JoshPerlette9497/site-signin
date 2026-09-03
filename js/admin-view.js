@@ -170,10 +170,10 @@ async function renderAdminDashboard(){
 
     <div class="section-title no-print">Filters</div>
     <div class="card no-print">
-      <div class="date-row">
-        <div class="date-field"><label>From</label><input type="date" id="fromDate" value="${defaultFromDate()}"></div>
-        <div class="date-field"><label>To</label><input type="date" id="toDate" value="${todayDate()}"></div>
-      </div>
+      <label>From</label>
+      <input type="date" id="fromDate" value="${defaultFromDate()}">
+      <label>To</label>
+      <input type="date" id="toDate" value="${todayDate()}">
       <label>Search name or company</label>
       <input type="text" id="searchText" placeholder="e.g. ACME or Smith">
       <label>Include</label>
