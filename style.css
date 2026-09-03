@@ -50,6 +50,16 @@ input,select,textarea{
   font-family:inherit;
 }
 textarea{min-height:70px; font-size:14px;}
+/* iOS Safari renders <input type="date"> in the device's full locale
+   date format (e.g. "August 4, 2026") and, in some WebKit versions,
+   refuses to shrink the control below that text's natural width even
+   with width:100% set — it just overflows its container instead of
+   wrapping or truncating. Smaller font/padding buys back the margin
+   most phone widths need to actually fit it. */
+input[type="date"]{
+  width:100%; max-width:100%; min-width:0; box-sizing:border-box;
+  font-size:14px; padding-left:8px; padding-right:8px;
+}
 label{font-size:11px; text-transform:uppercase; letter-spacing:0.5px; color:var(--ink-dim); display:block; margin-top:12px;}
 .divider{height:1px; background:var(--line); margin:16px 0;}
 .modal-bg{position:fixed; inset:0; background:rgba(20,40,40,0.45); z-index:50; display:flex; align-items:flex-end; justify-content:center;}
