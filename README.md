@@ -122,9 +122,29 @@ bucket — the anon key is already public by design; this isn't a new
 exposure, and it's what lets the Admin tab's "View submitted file" links
 work with a plain URL).
 
-Until the tables/bucket above exist, `index.html` loads fine but every
-sign-in/sign-out and form submission fails with a toast — nothing else
-breaks.
+**"Public bucket" only affects reading files, not uploading them** —
+uploads are still gated by RLS on Storage's own `storage.objects` table,
+separately from the `create policy` statements above (those are for the
+`subcontractors`/`site_visits`/`safety_documents` tables, not Storage).
+Without this, every upload — hazard assessment, equipment cert, incident
+report, or signature — fails with "new row violates row-level security
+policy." Run this too:
+
+```sql
+create policy "public insert safety-submissions"
+on storage.objects for insert
+to public
+with check (bucket_id = 'safety-submissions');
+
+create policy "public select safety-submissions"
+on storage.objects for select
+to public
+using (bucket_id = 'safety-submissions');
+```
+
+Until the tables/bucket/storage policies above exist, `index.html` loads
+fine but every sign-in/sign-out and form submission fails with a toast —
+nothing else breaks.
 
 ### Migration: daily sign-in form columns
 The sign-in flow now collects a full daily questionnaire + signature (see
