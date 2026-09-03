@@ -170,10 +170,10 @@ async function renderAdminDashboard(){
 
     <div class="section-title no-print">Filters</div>
     <div class="card no-print">
-      <label>From</label>
-      <input type="date" id="fromDate" value="${defaultFromDate()}">
-      <label>To</label>
-      <input type="date" id="toDate" value="${todayDate()}">
+      <label>From (YYYY-MM-DD)</label>
+      <input type="text" inputmode="numeric" id="fromDate" placeholder="YYYY-MM-DD" value="${defaultFromDate()}">
+      <label>To (YYYY-MM-DD)</label>
+      <input type="text" inputmode="numeric" id="toDate" placeholder="YYYY-MM-DD" value="${todayDate()}">
       <label>Search name or company</label>
       <input type="text" id="searchText" placeholder="e.g. ACME or Smith">
       <label>Include</label>
@@ -202,8 +202,8 @@ async function renderAdminDashboard(){
     await adminSignOut();
     renderAdminLogin();
   };
-  document.getElementById('fromDate').onchange = renderAdminFiltered;
-  document.getElementById('toDate').onchange = renderAdminFiltered;
+  document.getElementById('fromDate').oninput = renderAdminFiltered;
+  document.getElementById('toDate').oninput = renderAdminFiltered;
   document.getElementById('searchText').oninput = renderAdminFiltered;
   document.querySelectorAll('#typeChips input').forEach(cb=>{ cb.onchange = renderAdminFiltered; });
   document.getElementById('selectAllLink').onclick = (e)=>{
@@ -236,11 +236,19 @@ async function renderAdminDashboard(){
   renderAdminFiltered();
 }
 
+/* Plain text fields now (see renderAdminDashboard) rather than
+   <input type="date"> — iOS Safari's native date control ignores width
+   constraints in ways CSS can't reliably override, so typed YYYY-MM-DD
+   sidesteps that entirely. Falls back to an open-ended bound instead of
+   breaking the filter if what's typed isn't a valid date yet (e.g. still
+   mid-edit). */
 function filteredRange(){
-  const from = document.getElementById('fromDate').value;
-  const to = document.getElementById('toDate').value;
-  const fromTs = from ? new Date(from + 'T00:00:00').getTime() : -Infinity;
-  const toTs = to ? new Date(to + 'T23:59:59').getTime() : Infinity;
+  const from = document.getElementById('fromDate').value.trim();
+  const to = document.getElementById('toDate').value.trim();
+  const fromDate = from ? new Date(from + 'T00:00:00') : null;
+  const toDate = to ? new Date(to + 'T23:59:59') : null;
+  const fromTs = (fromDate && !isNaN(fromDate.getTime())) ? fromDate.getTime() : -Infinity;
+  const toTs = (toDate && !isNaN(toDate.getTime())) ? toDate.getTime() : Infinity;
   return { fromTs, toTs };
 }
 
