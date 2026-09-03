@@ -103,21 +103,39 @@ async function fetchSubDocs(){
 
 const MUSTER_LABELS = { site_office: 'Site Office', '81st_street': '81st Street SW' };
 
+/* One checkbox per row type in the Filters panel; `key` matches the
+   `label` mergeActivity assigns below, so filtering is a plain Set lookup. */
+const TYPE_FILTERS = [
+  { key: 'Signed in', label: 'Sign In' },
+  { key: 'Signed out', label: 'Sign Out' },
+  { key: `Submitted: ${DOC_TYPES.hazard_assessment}`, label: 'Hazard Assessment' },
+  { key: `Submitted: ${DOC_TYPES.equipment_cert}`, label: 'Equipment Cert' },
+  { key: `Submitted: ${DOC_TYPES.incident_report}`, label: 'Incident Report' }
+];
+
+function isImageUrl(url){
+  return /\.(jpe?g|png|gif|webp|heic|heif)(\?|$)/i.test(url || '');
+}
+
 function mergeActivity(visits, docs){
   return [
     ...visits.map(v=>({
-      ts: v.sign_in_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed in',
+      id: `${v.id}_in`, ts: v.sign_in_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed in',
       crewCount: v.crew_count, crewNames: v.crew_names, hadOrientation: v.had_orientation,
       musterPoint: v.muster_point, fitForWork: v.fit_for_work,
       signatureType: v.signature_type, signatureText: v.signature_text, signatureUrl: v.signature_file_url
     })),
-    ...visits.filter(v=>v.sign_out_at).map(v=>({ ts: v.sign_out_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed out' })),
-    ...docs.map(d=>({ ts: d.uploaded_at, name: d.subcontractor_name, company: d.subcontractor_company, label: `Submitted: ${DOC_TYPES[d.type] || d.type}`, url: d.file_url, notes: d.notes }))
+    ...visits.filter(v=>v.sign_out_at).map(v=>({ id: `${v.id}_out`, ts: v.sign_out_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed out' })),
+    ...docs.map(d=>({ id: d.id, ts: d.uploaded_at, name: d.subcontractor_name, company: d.subcontractor_company, label: `Submitted: ${DOC_TYPES[d.type] || d.type}`, url: d.file_url, notes: d.notes }))
   ].sort((a,b)=> new Date(b.ts) - new Date(a.ts));
 }
 
 /* ---------- dashboard ---------- */
 let allVisits = [], allDocs = [];
+/* Ids the user has unchecked via the per-row "include in export" checkbox
+   — everything else is included by default. Persists across filter/date
+   changes within one dashboard load; reset on next fetch. */
+let excludedIds = new Set();
 
 function defaultFromDate(){
   const d = new Date(); d.setDate(d.getDate() - 30);
@@ -128,6 +146,7 @@ function todayDate(){ return new Date().toISOString().slice(0,10); }
 async function renderAdminDashboard(){
   setHeader("Who's on site & submitted forms");
   const session = getAdminSession();
+  excludedIds = new Set();
   app.innerHTML = `
     <div class="card no-print">
       <div class="row">
@@ -136,13 +155,19 @@ async function renderAdminDashboard(){
       </div>
     </div>
 
-    <div class="section-title no-print">Date Range</div>
+    <div class="section-title no-print">Filters</div>
     <div class="card no-print">
       <div style="display:flex; gap:8px;">
         <div style="flex:1;"><label>From</label><input type="date" id="fromDate" value="${defaultFromDate()}"></div>
         <div style="flex:1;"><label>To</label><input type="date" id="toDate" value="${todayDate()}"></div>
       </div>
-      <div style="display:flex; gap:8px; margin-top:10px;">
+      <label>Search name or company</label>
+      <input type="text" id="searchText" placeholder="e.g. ACME or Smith">
+      <label>Include</label>
+      <div class="chip-row" id="typeChips">
+        ${TYPE_FILTERS.map(t=>`<label class="chip-opt"><input type="checkbox" value="${escapeHtml(t.key)}" checked> ${escapeHtml(t.label)}</label>`).join('')}
+      </div>
+      <div style="display:flex; gap:8px; margin-top:12px;">
         <button class="btn ghost" id="exportCsvBtn" style="flex:1;">Export CSV</button>
         <button class="btn ghost" id="printBtn" style="flex:1;">Print Report</button>
       </div>
@@ -150,7 +175,12 @@ async function renderAdminDashboard(){
 
     <div class="section-title">On Site Now</div>
     <div id="onSite"><div class="helptext" style="margin:4px;">Loading…</div></div>
-    <div class="section-title">Activity</div>
+    <div class="section-title" style="display:flex; justify-content:space-between; align-items:baseline;">
+      <span>Activity</span>
+      <span class="no-print" style="text-transform:none; letter-spacing:0; font-weight:400; font-size:12px;">
+        <a href="#" id="selectAllLink">Select all</a> · <a href="#" id="selectNoneLink">Select none</a>
+      </span>
+    </div>
     <div id="activity"><div class="helptext" style="margin:4px;">Loading…</div></div>
   `;
 
@@ -161,6 +191,18 @@ async function renderAdminDashboard(){
   };
   document.getElementById('fromDate').onchange = renderAdminFiltered;
   document.getElementById('toDate').onchange = renderAdminFiltered;
+  document.getElementById('searchText').oninput = renderAdminFiltered;
+  document.querySelectorAll('#typeChips input').forEach(cb=>{ cb.onchange = renderAdminFiltered; });
+  document.getElementById('selectAllLink').onclick = (e)=>{
+    e.preventDefault();
+    getVisibleItems().forEach(it => excludedIds.delete(it.id));
+    renderAdminFiltered();
+  };
+  document.getElementById('selectNoneLink').onclick = (e)=>{
+    e.preventDefault();
+    getVisibleItems().forEach(it => excludedIds.add(it.id));
+    renderAdminFiltered();
+  };
   document.getElementById('exportCsvBtn').onclick = exportCSV;
   document.getElementById('printBtn').onclick = ()=>window.print();
 
@@ -189,13 +231,29 @@ function filteredRange(){
   return { fromTs, toTs };
 }
 
-function renderAdminFiltered(){
+/* All active filters (date range, type checkboxes, name/company search) —
+   NOT the per-row include/exclude checkboxes, since Select All/None need
+   the full visible set regardless of current checkbox state. */
+function getVisibleItems(){
   const { fromTs, toTs } = filteredRange();
-  const items = mergeActivity(allVisits, allDocs).filter(it=>{
+  const search = (document.getElementById('searchText').value || '').toLowerCase().trim();
+  const activeTypes = new Set(
+    Array.from(document.querySelectorAll('#typeChips input:checked')).map(cb => cb.value)
+  );
+  return mergeActivity(allVisits, allDocs).filter(it=>{
     const t = new Date(it.ts).getTime();
-    return t >= fromTs && t <= toTs;
+    if(t < fromTs || t > toTs) return false;
+    if(!activeTypes.has(it.label)) return false;
+    if(search){
+      const hay = `${it.name || ''} ${it.company || ''}`.toLowerCase();
+      if(!hay.includes(search)) return false;
+    }
+    return true;
   });
-  renderAdminActivityList(items);
+}
+
+function renderAdminFiltered(){
+  renderAdminActivityList(getVisibleItems());
 }
 
 function renderAdminOnSite(visits){
@@ -217,9 +275,13 @@ function renderAdminOnSite(visits){
 
 function renderAdminActivityList(items){
   const el = document.getElementById('activity');
-  if(!items.length){ el.innerHTML = `<div class="empty">No sign-ins or submissions in this range.</div>`; return; }
+  if(!items.length){ el.innerHTML = `<div class="empty">Nothing matches these filters.</div>`; return; }
   el.innerHTML = items.map(it=>`
-    <div class="card">
+    <div class="card ${excludedIds.has(it.id) ? 'excluded' : ''}" data-id="${escapeHtml(it.id)}">
+      <label class="row-select no-print">
+        <input type="checkbox" class="row-checkbox" ${excludedIds.has(it.id) ? '' : 'checked'}>
+        <span class="item-meta">Include in export</span>
+      </label>
       <div class="row">
         <div>
           <div style="font-weight:700;">${escapeHtml(it.name || 'Unknown')}</div>
@@ -228,13 +290,24 @@ function renderAdminActivityList(items){
           ${it.crewCount != null ? `<div class="item-meta">Crew of ${it.crewCount}: ${escapeHtml(it.crewNames || '')}</div>` : ''}
           ${it.hadOrientation != null ? `<div class="item-meta">Orientation: ${it.hadOrientation ? 'Yes' : 'No'} · Muster point: ${escapeHtml(MUSTER_LABELS[it.musterPoint] || it.musterPoint || '')} · Fit for work: ${it.fitForWork ? 'Yes' : 'No'}</div>` : ''}
           ${it.signatureType === 'typed' ? `<div class="item-meta">Signature: <em>${escapeHtml(it.signatureText || '')}</em></div>` : ''}
-          ${it.signatureType === 'drawn' && it.signatureUrl ? `<div class="item-meta">Signature: <a href="${escapeHtml(it.signatureUrl)}" target="_blank">view</a></div>` : ''}
+          ${it.signatureType === 'drawn' && it.signatureUrl ? `<div class="item-meta">Signature:</div><img src="${escapeHtml(it.signatureUrl)}" class="signature-thumb" alt="Signature">` : ''}
         </div>
         <div class="item-meta" style="text-align:right; white-space:nowrap;">${new Date(it.ts).toLocaleString('en-US',{month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}</div>
       </div>
-      ${it.url ? `<div class="divider" style="margin:8px 0;"></div><a href="${escapeHtml(it.url)}" target="_blank">View submitted file</a>` : ''}
+      ${it.url ? (isImageUrl(it.url)
+        ? `<img src="${escapeHtml(it.url)}" class="attachment-thumb" alt="Submitted file">`
+        : `<div class="divider" style="margin:8px 0;"></div><a href="${escapeHtml(it.url)}" target="_blank">View submitted file</a>`
+      ) : ''}
     </div>
   `).join('');
+  el.querySelectorAll('.row-checkbox').forEach(cb=>{
+    cb.onchange = ()=>{
+      const card = cb.closest('.card');
+      const id = card.dataset.id;
+      if(cb.checked){ excludedIds.delete(id); card.classList.remove('excluded'); }
+      else { excludedIds.add(id); card.classList.add('excluded'); }
+    };
+  });
 }
 
 /* ---------- CSV export ---------- */
@@ -257,12 +330,8 @@ function toCSV(items){
   return [header, ...rows].map(r => r.map(escapeCell).join(',')).join('\r\n');
 }
 function exportCSV(){
-  const { fromTs, toTs } = filteredRange();
-  const items = mergeActivity(allVisits, allDocs).filter(it=>{
-    const t = new Date(it.ts).getTime();
-    return t >= fromTs && t <= toTs;
-  });
-  if(!items.length){ showToast('Nothing to export in this range.'); return; }
+  const items = getVisibleItems().filter(it => !excludedIds.has(it.id));
+  if(!items.length){ showToast('Nothing selected to export.'); return; }
   const from = document.getElementById('fromDate').value, to = document.getElementById('toDate').value;
   const csv = toCSV(items);
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });

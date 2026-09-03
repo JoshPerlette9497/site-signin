@@ -251,13 +251,27 @@ same "Set your password" screen as a first-time invite.
 ## Reviewing records / audits
 The Admin tab, once logged in, shows:
 - **On Site Now** — anyone with an open sign-in and no sign-out yet.
-- **Activity**, filterable by date range — every sign-in, sign-out, and
-  form submission, with a link to view each submitted file.
-- **Export CSV** — downloads the currently-filtered range as a CSV
-  (timestamp, name, company, action, notes, file URL) — hand this directly
-  to a safety auditor.
-- **Print Report** — a clean, printable version of the same filtered list
-  (browser print → save as PDF works too).
+- **Filters** — date range, a name/company search box, and checkboxes per
+  event type (Sign In, Sign Out, Hazard Assessment, Equipment Cert,
+  Incident Report) to narrow the Activity list to whatever you're
+  reviewing or exporting.
+- **Activity** — every sign-in, sign-out, and form submission matching the
+  filters above. Each row has its own "Include in export" checkbox
+  (**Select all** / **Select none** shortcuts sit above the list) — the
+  filters narrow what's shown, the checkboxes pick exactly which of those
+  rows actually go into the export. Attachments render inline rather than
+  as a bare link: photos (hazard assessment/equipment cert/incident report
+  uploads, drawn signatures) show as a thumbnail; non-image files (e.g. a
+  PDF) show as a "View submitted file" link since there's nothing to
+  thumbnail.
+- **Export CSV** — downloads exactly the filtered + checked rows as a CSV
+  (timestamp, name, company, action, crew/orientation/muster/fit-for-work
+  detail, signature, notes, and the submitted file's URL) — hand this
+  directly to a safety auditor.
+- **Print Report** — a clean, printable version of the same filtered +
+  checked rows, with attachment thumbnails visible on the page itself
+  (browser print → save as PDF works too, so the PDF is a self-contained
+  record with the photos actually in it, not just links to them).
 
 ## Regenerating the QR code
 `qr.html` has the QR SVG hardcoded, generated once with the `qrcode` npm
