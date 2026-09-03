@@ -18,21 +18,30 @@
    Reached via initApp() in js/app.js when the page loads with an
    access_token in the URL hash (from a Supabase invite or password-reset
    email) — see parseAuthCallbackHash() in js/storage.js. */
-function renderSetPasswordForm(callback){
+async function renderSetPasswordForm(callback){
   setHeader(callback.type === 'invite' ? 'Set your admin password' : 'Reset your password');
+  const user = await getAuthUser(callback.accessToken);
+  const email = user && user.email || '';
   app.innerHTML = `
     <div class="card">
       <div class="helptext">${callback.type === 'invite'
         ? "You're setting up admin access for the first time — choose a password you'll use to sign in from now on."
-        : 'Choose a new password.'}</div>
+        : 'Choose a new password.'}${email ? ` (${escapeHtml(email)})` : ''}</div>
     </div>
-    <label>New Password</label>
-    <input id="newPassword" type="password" autocomplete="new-password">
-    <label>Confirm Password</label>
-    <input id="confirmPassword" type="password" autocomplete="new-password">
-    <button class="btn" id="setPasswordBtn" style="width:100%; margin-top:18px;">Set Password &amp; Continue</button>
+    <form id="setPasswordForm">
+      <input type="text" name="username" autocomplete="username" value="${escapeHtml(email)}" readonly hidden>
+      <label>New Password</label>
+      <input id="newPassword" name="new-password" type="password" autocomplete="new-password" required>
+      <label>Confirm Password</label>
+      <input id="confirmPassword" name="confirm-password" type="password" autocomplete="new-password" required>
+      <button class="btn" type="submit" id="setPasswordBtn" style="width:100%; margin-top:18px;">Set Password &amp; Continue</button>
+    </form>
   `;
-  document.getElementById('setPasswordBtn').onclick = async ()=>{
+  /* Real <form> + type="submit" (not a plain button onclick) + a
+     username field the password manager can tie the new password to —
+     that combination is what gets Safari/Chrome to offer saving it. */
+  document.getElementById('setPasswordForm').onsubmit = async (e)=>{
+    e.preventDefault();
     const p1 = document.getElementById('newPassword').value;
     const p2 = document.getElementById('confirmPassword').value;
     if(!p1 || p1.length < 6){ showToast('Password must be at least 6 characters.'); return; }
@@ -40,9 +49,9 @@ function renderSetPasswordForm(callback){
     const btn = document.getElementById('setPasswordBtn');
     btn.disabled = true; btn.textContent = 'Saving…';
     try{
-      const user = await setAdminPassword(callback.accessToken, p1);
+      const updated = await setAdminPassword(callback.accessToken, p1);
       const expiresAt = Math.floor(Date.now() / 1000) + callback.expiresIn;
-      saveAdminSession({ access_token: callback.accessToken, refresh_token: callback.refreshToken, expires_at: expiresAt, email: user && user.email });
+      saveAdminSession({ access_token: callback.accessToken, refresh_token: callback.refreshToken, expires_at: expiresAt, email: (updated && updated.email) || email });
       history.replaceState(null, '', window.location.pathname + window.location.search);
       showToast('Password set. Welcome in.');
       renderAdminDashboard();
@@ -68,14 +77,20 @@ function renderAdminLogin(){
     <div class="card">
       <div class="helptext">Sign in with the account Josh set up for you to view sign-ins and submitted safety forms.</div>
     </div>
-    <label>Email</label>
-    <input id="loginEmail" type="email" autocomplete="username">
-    <label>Password</label>
-    <input id="loginPassword" type="password" autocomplete="current-password">
-    <button class="btn" id="loginBtn" style="width:100%; margin-top:18px;">Sign In</button>
+    <form id="loginForm">
+      <label>Email</label>
+      <input id="loginEmail" name="username" type="email" autocomplete="username" required>
+      <label>Password</label>
+      <input id="loginPassword" name="password" type="password" autocomplete="current-password" required>
+      <button class="btn" type="submit" id="loginBtn" style="width:100%; margin-top:18px;">Sign In</button>
+    </form>
     <div class="helptext" style="margin-top:10px;">No account? Ask Josh to invite you from the Supabase dashboard.</div>
   `;
-  const submit = async ()=>{
+  /* A real <form> + type="submit" (rather than a plain button onclick) is
+     what makes Safari/Chrome offer to save the password — browsers key
+     their "save password?" prompt off an actual form submit event. */
+  document.getElementById('loginForm').onsubmit = async (e)=>{
+    e.preventDefault();
     const email = document.getElementById('loginEmail').value.trim();
     const password = document.getElementById('loginPassword').value;
     if(!email || !password){ showToast('Enter your email and password.'); return; }
@@ -89,8 +104,6 @@ function renderAdminLogin(){
       btn.disabled = false; btn.textContent = 'Sign In';
     }
   };
-  document.getElementById('loginBtn').onclick = submit;
-  document.getElementById('loginPassword').onkeydown = (e)=>{ if(e.key==='Enter') submit(); };
 }
 
 /* ---------- data ---------- */

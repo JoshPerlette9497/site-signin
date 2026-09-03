@@ -188,6 +188,17 @@ function parseAuthCallbackHash(){
   };
 }
 
+/* Looks up which account an invite/recovery access_token belongs to, so
+   the "set your password" screen can show/autofill-tag the email — lets
+   the browser's password manager save it against the right account. */
+async function getAuthUser(accessToken){
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${accessToken}` }
+  });
+  if(!res.ok) return null;
+  return res.json();
+}
+
 /* Sets the password for whoever the access_token belongs to (from the
    invite/recovery link above), using it as the auth for the request —
    this is how a brand-new invited user gets to actually choose a
