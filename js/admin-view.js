@@ -157,9 +157,9 @@ async function renderAdminDashboard(){
 
     <div class="section-title no-print">Filters</div>
     <div class="card no-print">
-      <div style="display:flex; gap:8px;">
-        <div style="flex:1;"><label>From</label><input type="date" id="fromDate" value="${defaultFromDate()}"></div>
-        <div style="flex:1;"><label>To</label><input type="date" id="toDate" value="${todayDate()}"></div>
+      <div class="date-row">
+        <div class="date-field"><label>From</label><input type="date" id="fromDate" value="${defaultFromDate()}"></div>
+        <div class="date-field"><label>To</label><input type="date" id="toDate" value="${todayDate()}"></div>
       </div>
       <label>Search name or company</label>
       <input type="text" id="searchText" placeholder="e.g. ACME or Smith">

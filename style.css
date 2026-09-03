@@ -100,6 +100,10 @@ nav.tabs button.active{color:var(--brand-dark); background:#E1EFEF;}
 .tab-icon{display:block; font-size:17px; margin-bottom:2px;}
 .tab-label{display:block; width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
 
+.date-row{display:flex; gap:8px;}
+.date-field{flex:1; min-width:0;}
+.date-field input{min-width:0; font-size:14px; padding-left:8px; padding-right:8px;}
+
 .chip-row{display:flex; flex-wrap:wrap; gap:8px; margin-top:6px;}
 .chip-opt{
   display:flex; align-items:center; gap:5px; font-size:12px;
