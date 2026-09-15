@@ -273,6 +273,43 @@ The Admin tab, once logged in, shows:
   (browser print → save as PDF works too, so the PDF is a self-contained
   record with the photos actually in it, not just links to them).
 
+## Daily activity email
+`.github/workflows/daily-digest.yml` runs `scripts/daily-digest.js` on a
+schedule (GitHub Actions, free) and emails a summary of the last 24 hours —
+every sign-in, sign-out, and submission, with crew/orientation/signature
+detail and submitted photos shown inline in the email — to whatever address
+you configure. It sends via [Resend](https://resend.com) rather than through
+your own Gmail/Outlook: sending *as* your real account needs OAuth consent
+that corporate IT often locks down, but nothing is required to *receive*
+email from a transactional sender like Resend — so this works with zero
+admin approval.
+
+**One-time setup:**
+1. Sign up free at [resend.com](https://resend.com) (personal account, no
+   credit card, no org approval needed) and create an API key
+   (Dashboard → API Keys).
+2. Get your Supabase **service_role** secret key (Project Settings → API —
+   the same key described under "Admin accounts" above). This bypasses RLS,
+   which is fine here since it only ever runs inside GitHub's own runner,
+   never in a browser — but it must be treated as a secret, same rules as
+   everywhere else in this doc.
+3. In this repo: **Settings → Secrets and variables → Actions**, add three
+   repository secrets:
+   - `SUPABASE_SERVICE_ROLE_KEY` — from step 2
+   - `RESEND_API_KEY` — from step 1
+   - `DIGEST_TO_EMAIL` — the address that should receive the digest
+4. (Optional) Once you've verified a custom sending domain in Resend, add a
+   repository **variable** (not secret — it's not sensitive) named
+   `DIGEST_FROM_EMAIL` set to an address on that domain, so the email
+   doesn't come from Resend's shared `onboarding@resend.dev` address.
+5. That's it — it runs automatically at 22:00 UTC daily (edit the `cron`
+   line in the workflow file to change the time; cron is always UTC). To
+   test immediately without waiting: **Actions tab → Daily activity digest
+   → Run workflow**.
+
+Empty days still send, saying "No activity in the past 24 hours" — ask if
+you'd rather it skip sending entirely when there's nothing to report.
+
 ## Regenerating the QR code
 `qr.html` has the QR SVG hardcoded, generated once with the `qrcode` npm
 package pointed at `https://joshperlette9497.github.io/site-signin/`. If
