@@ -167,9 +167,36 @@ alter table site_visits
 No new bucket needed — drawn signatures upload into the same
 `safety-submissions` bucket, under a `signatures/` folder.
 
+### Migration: multi-site support
+Both sign-in and form submissions now require picking a site. Run once:
+
+```sql
+alter table site_visits add column if not exists site text;
+alter table safety_documents add column if not exists site text;
+```
+
+The sites themselves (`SITES` — currently Juniper Townhomes and Aurora
+Townhomes) are defined once in `js/app.js` and shared with `js/admin-view.js`
+for the Admin tab's filter/CSV, same pattern as `DOC_TYPES`. Add a site by
+adding one entry to that array — nothing else needs to change.
+
+**Known limitation carried over unchanged:** the muster-point question in
+the sign-in form below (Site Office vs. 81st Street SW) still has a single
+hardcoded correct answer regardless of which site was picked. If Juniper
+and Aurora actually have different muster points, that question needs to
+branch on the selected site — I didn't build that since it wasn't asked
+for, but flagging it now before it becomes a real problem.
+
 ## Daily sign-in form
 Tapping **Sign In** now opens a required questionnaire before the sign-in
 is recorded:
+- **Which site** — Juniper Townhomes or Aurora Townhomes (radio, required).
+  The same picker appears on every form submission (Hazard Assessment,
+  Equipment Cert, Incident Report) too, independently — signing into one
+  site doesn't imply submissions during that session are for the same one,
+  since a crew member could reasonably submit a form for either site while
+  signed in. Both block submission entirely if nothing's selected, same as
+  every other required field here.
 - How many workers are on the crew today (number)
 - First and last names of all crew members (free text)
 - Whether they've received orientation on this site (Yes/No) — recorded,
@@ -250,7 +277,11 @@ same "Set your password" screen as a first-time invite.
 
 ## Reviewing records / audits
 The Admin tab, once logged in, shows:
-- **On Site Now** — anyone with an open sign-in and no sign-out yet.
+- **On Site Now** — anyone with an open sign-in and no sign-out yet, each
+  with its own **Sign Out** button so you can close out a visit yourself if
+  someone leaves without tapping "Sign Out" on their own phone (common in
+  practice — otherwise they'd stay listed here indefinitely and never
+  produce a "Signed out" row below).
 - **Filters** — date range, a name/company search box, and checkboxes per
   event type (Sign In, Sign Out, Hazard Assessment, Equipment Cert,
   Incident Report) to narrow the Activity list to whatever you're

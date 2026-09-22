@@ -30,6 +30,8 @@ const DOC_TYPES = {
   incident_report: 'Incident Report'
 };
 const MUSTER_LABELS = { site_office: 'Site Office', '81st_street': '81st Street SW' };
+// Keep in sync with SITES in js/app.js — same site keys either place.
+const SITE_LABELS = { juniper: 'Juniper Townhomes', aurora: 'Aurora Townhomes' };
 
 function esc(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -63,20 +65,21 @@ async function fetchActivity() {
     if (new Date(v.sign_in_at).getTime() >= sinceTs) {
       items.push({
         ts: v.sign_in_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed in',
+        site: v.site,
         crewCount: v.crew_count, crewNames: v.crew_names, hadOrientation: v.had_orientation,
         musterPoint: v.muster_point, fitForWork: v.fit_for_work,
         signatureType: v.signature_type, signatureText: v.signature_text, signatureUrl: v.signature_file_url
       });
     }
     if (v.sign_out_at && new Date(v.sign_out_at).getTime() >= sinceTs) {
-      items.push({ ts: v.sign_out_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed out' });
+      items.push({ ts: v.sign_out_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed out', site: v.site });
     }
   });
 
   (docs || []).forEach(d => {
     items.push({
       ts: d.uploaded_at, name: d.subcontractor_name, company: d.subcontractor_company,
-      label: `Submitted: ${DOC_TYPES[d.type] || d.type}`, url: d.file_url, notes: d.notes
+      label: `Submitted: ${DOC_TYPES[d.type] || d.type}`, site: d.site, url: d.file_url, notes: d.notes
     });
   });
 
@@ -95,7 +98,7 @@ function buildEmail(items) {
     items.forEach(it => {
       html += `<div style="border:1px solid #D8E4E4; border-radius:8px; padding:12px; margin-bottom:10px;">`;
       html += `<div style="font-weight:700;">${esc(it.name || 'Unknown')}</div>`;
-      html += `<div style="color:#5C7778; font-size:12px;">${esc(it.company || '')} &middot; ${esc(it.label)} &middot; ${esc(new Date(it.ts).toLocaleString('en-US'))}</div>`;
+      html += `<div style="color:#5C7778; font-size:12px;">${esc(it.company || '')} &middot; ${esc(SITE_LABELS[it.site] || it.site || 'Unknown site')} &middot; ${esc(it.label)} &middot; ${esc(new Date(it.ts).toLocaleString('en-US'))}</div>`;
       if (it.notes) html += `<div style="font-size:12px; margin-top:4px;">${esc(it.notes)}</div>`;
       if (it.crewCount != null) html += `<div style="font-size:12px; margin-top:4px;">Crew of ${esc(it.crewCount)}: ${esc(it.crewNames || '')}</div>`;
       if (it.hadOrientation != null) {

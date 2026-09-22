@@ -134,12 +134,13 @@ function mergeActivity(visits, docs){
   return [
     ...visits.map(v=>({
       id: `${v.id}_in`, ts: v.sign_in_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed in',
+      site: v.site,
       crewCount: v.crew_count, crewNames: v.crew_names, hadOrientation: v.had_orientation,
       musterPoint: v.muster_point, fitForWork: v.fit_for_work,
       signatureType: v.signature_type, signatureText: v.signature_text, signatureUrl: v.signature_file_url
     })),
-    ...visits.filter(v=>v.sign_out_at).map(v=>({ id: `${v.id}_out`, ts: v.sign_out_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed out' })),
-    ...docs.map(d=>({ id: d.id, ts: d.uploaded_at, name: d.subcontractor_name, company: d.subcontractor_company, label: `Submitted: ${DOC_TYPES[d.type] || d.type}`, url: d.file_url, notes: d.notes }))
+    ...visits.filter(v=>v.sign_out_at).map(v=>({ id: `${v.id}_out`, ts: v.sign_out_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed out', site: v.site })),
+    ...docs.map(d=>({ id: d.id, ts: d.uploaded_at, name: d.subcontractor_name, company: d.subcontractor_company, label: `Submitted: ${DOC_TYPES[d.type] || d.type}`, site: d.site, url: d.file_url, notes: d.notes }))
   ].sort((a,b)=> new Date(b.ts) - new Date(a.ts));
 }
 
@@ -176,6 +177,10 @@ async function renderAdminDashboard(){
       <input type="text" inputmode="numeric" id="toDate" placeholder="YYYY-MM-DD" value="${todayDate()}">
       <label>Search name or company</label>
       <input type="text" id="searchText" placeholder="e.g. ACME or Smith">
+      <label>Site</label>
+      <div class="chip-row" id="siteChips">
+        ${SITES.map(s=>`<label class="chip-opt"><input type="checkbox" value="${escapeHtml(s.key)}" checked> ${escapeHtml(s.label)}</label>`).join('')}
+      </div>
       <label>Include</label>
       <div class="chip-row" id="typeChips">
         ${TYPE_FILTERS.map(t=>`<label class="chip-opt"><input type="checkbox" value="${escapeHtml(t.key)}" checked> ${escapeHtml(t.label)}</label>`).join('')}
@@ -206,6 +211,7 @@ async function renderAdminDashboard(){
   document.getElementById('toDate').oninput = renderAdminFiltered;
   document.getElementById('searchText').oninput = renderAdminFiltered;
   document.querySelectorAll('#typeChips input').forEach(cb=>{ cb.onchange = renderAdminFiltered; });
+  document.querySelectorAll('#siteChips input').forEach(cb=>{ cb.onchange = renderAdminFiltered; });
   document.getElementById('selectAllLink').onclick = (e)=>{
     e.preventDefault();
     getVisibleItems().forEach(it => excludedIds.delete(it.id));
@@ -232,7 +238,6 @@ async function renderAdminDashboard(){
     document.getElementById('activity').innerHTML = '';
     return;
   }
-  renderAdminOnSite(allVisits);
   renderAdminFiltered();
 }
 
@@ -261,10 +266,14 @@ function getVisibleItems(){
   const activeTypes = new Set(
     Array.from(document.querySelectorAll('#typeChips input:checked')).map(cb => cb.value)
   );
+  const activeSites = new Set(
+    Array.from(document.querySelectorAll('#siteChips input:checked')).map(cb => cb.value)
+  );
   return mergeActivity(allVisits, allDocs).filter(it=>{
     const t = new Date(it.ts).getTime();
     if(t < fromTs || t > toTs) return false;
     if(!activeTypes.has(it.label)) return false;
+    if(!activeSites.has(it.site)) return false;
     if(search){
       const hay = `${it.name || ''} ${it.company || ''}`.toLowerCase();
       if(!hay.includes(search)) return false;
@@ -274,11 +283,15 @@ function getVisibleItems(){
 }
 
 function renderAdminFiltered(){
+  renderAdminOnSite(allVisits);
   renderAdminActivityList(getVisibleItems());
 }
 
 function renderAdminOnSite(visits){
-  const onSite = visits.filter(v=>!v.sign_out_at);
+  const activeSites = new Set(
+    Array.from(document.querySelectorAll('#siteChips input:checked')).map(cb => cb.value)
+  );
+  const onSite = visits.filter(v=>!v.sign_out_at && activeSites.has(v.site));
   const el = document.getElementById('onSite');
   if(!onSite.length){ el.innerHTML = `<div class="empty">Nobody currently signed in.</div>`; return; }
   el.innerHTML = onSite.map(v=>`
@@ -286,12 +299,31 @@ function renderAdminOnSite(visits){
       <div class="row">
         <div>
           <div style="font-weight:700;">${escapeHtml(v.subcontractor_name || 'Unknown')}</div>
-          <div class="item-meta">${escapeHtml(v.subcontractor_company || '')}</div>
+          <div class="item-meta">${escapeHtml(v.subcontractor_company || '')} · ${escapeHtml(SITE_LABELS[v.site] || v.site || '')}</div>
         </div>
         <div class="item-meta">Signed in ${new Date(v.sign_in_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</div>
       </div>
+      <button class="btn ghost no-print sign-out-visit-btn" data-visit-id="${escapeHtml(v.id)}" style="width:100%; margin-top:10px;">Sign Out</button>
     </div>
   `).join('');
+  /* Covers the case where a subcontractor leaves without tapping "Sign
+     Out" on their own phone — without this, they'd stay listed here
+     forever and never produce a "Signed out" row in the Activity feed. */
+  el.querySelectorAll('.sign-out-visit-btn').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const visitId = btn.dataset.visitId;
+      btn.disabled = true; btn.textContent = 'Signing out…';
+      try{
+        await adminSignOutVisit(visitId);
+        const visit = allVisits.find(v=>v.id === visitId);
+        if(visit) visit.sign_out_at = new Date().toISOString();
+        renderAdminFiltered();
+      }catch(e){
+        showToast(e.message || "Couldn't sign out — check your connection and try again.");
+        btn.disabled = false; btn.textContent = 'Sign Out';
+      }
+    };
+  });
 }
 
 function renderAdminActivityList(items){
@@ -306,7 +338,7 @@ function renderAdminActivityList(items){
       <div class="row">
         <div>
           <div style="font-weight:700;">${escapeHtml(it.name || 'Unknown')}</div>
-          <div class="item-meta">${escapeHtml(it.company || '')} · ${escapeHtml(it.label)}</div>
+          <div class="item-meta">${escapeHtml(it.company || '')} · ${escapeHtml(SITE_LABELS[it.site] || it.site || 'Unknown site')} · ${escapeHtml(it.label)}</div>
           ${it.notes ? `<div class="item-meta">${escapeHtml(it.notes)}</div>` : ''}
           ${it.crewCount != null ? `<div class="item-meta">Crew of ${it.crewCount}: ${escapeHtml(it.crewNames || '')}</div>` : ''}
           ${it.hadOrientation != null ? `<div class="item-meta">Orientation: ${it.hadOrientation ? 'Yes' : 'No'} · Muster point: ${escapeHtml(MUSTER_LABELS[it.musterPoint] || it.musterPoint || '')} · Fit for work: ${it.fitForWork ? 'Yes' : 'No'}</div>` : ''}
@@ -334,12 +366,12 @@ function renderAdminActivityList(items){
 /* ---------- CSV export ---------- */
 function toCSV(items){
   const header = [
-    'Timestamp', 'Name', 'Company', 'Action',
+    'Timestamp', 'Site', 'Name', 'Company', 'Action',
     'Crew Count', 'Crew Names', 'Orientation', 'Muster Point', 'Fit For Work', 'Signature',
     'Notes', 'File URL'
   ];
   const rows = items.map(it => [
-    new Date(it.ts).toLocaleString('en-US'), it.name || '', it.company || '', it.label,
+    new Date(it.ts).toLocaleString('en-US'), SITE_LABELS[it.site] || it.site || '', it.name || '', it.company || '', it.label,
     it.crewCount ?? '', it.crewNames || '',
     it.hadOrientation == null ? '' : (it.hadOrientation ? 'Yes' : 'No'),
     MUSTER_LABELS[it.musterPoint] || it.musterPoint || '',

@@ -10,6 +10,18 @@ const DOC_TYPES = {
 };
 const CORRECT_MUSTER_POINT = '81st_street';
 
+/* Shared with js/admin-view.js (SITE_LABELS derived from this, same pattern
+   as DOC_TYPES above) — add a site here and it shows up everywhere: the
+   sign-in form, the submit-a-form modal, and the Admin tab's filter/CSV. */
+const SITES = [
+  { key: 'juniper', label: 'Juniper Townhomes' },
+  { key: 'aurora', label: 'Aurora Townhomes' }
+];
+const SITE_LABELS = Object.fromEntries(SITES.map(s => [s.key, s.label]));
+function siteRadioRow(name, selectedKey){
+  return SITES.map(s => `<label class="radio-opt"><input type="radio" name="${name}" value="${s.key}" ${s.key === selectedKey ? 'checked' : ''}> ${escapeHtml(s.label)}</label>`).join('');
+}
+
 function setHeader(sub){
   document.getElementById('headerSub').textContent = sub;
 }
@@ -180,6 +192,9 @@ function openSignInForm(profile){
     <h2>Daily Sign-In</h2>
     <div class="helptext" style="margin-bottom:6px;">Complete this each time you sign in for the day.</div>
 
+    <label>Which site are you signing into? *</label>
+    <div class="radio-row">${siteRadioRow('siSite', getLastSite())}</div>
+
     <label>How many workers are on your crew today? *</label>
     <input id="siCrewCount" type="number" min="1" inputmode="numeric" placeholder="e.g. 4">
 
@@ -286,6 +301,7 @@ function setupSignatureCanvas(){
 }
 
 async function submitSignInForm(profile, canvas){
+  const site = document.querySelector('input[name="siSite"]:checked');
   const crewCount = document.getElementById('siCrewCount').value.trim();
   const crewNames = document.getElementById('siCrewNames').value.trim();
   const orientation = document.querySelector('input[name="siOrientation"]:checked');
@@ -294,6 +310,7 @@ async function submitSignInForm(profile, canvas){
   const typing = document.getElementById('sigTypeWrap').style.display !== 'none';
   const typedSig = document.getElementById('sigTypedInput').value.trim();
 
+  if(!site){ showToast('Select which site you\'re signing into.'); return; }
   if(!crewCount || Number(crewCount) < 1){ showToast('Enter how many workers are on your crew today.'); return; }
   if(!crewNames){ showToast('Enter the names of all crew members.'); return; }
   if(!orientation){ showToast("Answer whether you've received orientation on this site."); return; }
@@ -322,12 +339,14 @@ async function submitSignInForm(profile, canvas){
       signatureFileUrl = await uploadSignatureBlob(blob);
     }
     await signIn(profile, {
+      site: site.value, siteLabel: SITE_LABELS[site.value],
       crewCount: Number(crewCount), crewNames,
       hadOrientation: orientation.value === 'yes',
       musterPoint: muster.value,
       fitForWork: fit.value === 'yes',
       signatureType, signatureText, signatureFileUrl
     });
+    setLastSite(site.value);
     closeModal();
     showToast('Signed in. Have a safe day on site.');
     refreshStatus();
@@ -344,6 +363,8 @@ function openSubmitModal(type){
   showModal(`
     <h2>${escapeHtml(DOC_TYPES[type])}</h2>
     <div class="helptext" style="margin-bottom:6px;">Take a photo or choose a scanned file of the completed form.</div>
+    <label>Which site is this for? *</label>
+    <div class="radio-row">${siteRadioRow('docSite', getLastSite())}</div>
     <input type="file" id="docFile" accept="image/*,application/pdf" capture="environment">
     <img id="docPreview" class="file-preview" style="display:none;">
     <label>Notes (optional)</label>
@@ -362,7 +383,9 @@ function openSubmitModal(type){
     }
   };
   document.getElementById('docSubmitBtn').onclick = async ()=>{
+    const site = document.querySelector('input[name="docSite"]:checked');
     const file = fileInput.files[0];
+    if(!site){ showToast('Select which site this is for.'); return; }
     if(!file){ showToast('Choose a photo or file first.'); return; }
     const profile = getProfile();
     const notes = document.getElementById('docNotes').value.trim();
@@ -370,7 +393,8 @@ function openSubmitModal(type){
     btn.disabled = true; btn.textContent = 'Uploading…';
     try{
       const fileUrl = await uploadDocFile(file);
-      await submitDocument(profile, type, fileUrl, notes, DOC_TYPES[type]);
+      await submitDocument(profile, type, fileUrl, notes, DOC_TYPES[type], site.value, SITE_LABELS[site.value]);
+      setLastSite(site.value);
       closeModal();
       showToast(`${DOC_TYPES[type]} submitted.`);
       refreshActivity();

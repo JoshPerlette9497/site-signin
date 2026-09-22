@@ -39,6 +39,11 @@ function getProfile(){
 function saveProfile(profile){ localStorage.setItem('subProfile', JSON.stringify(profile)); }
 function clearProfile(){ localStorage.removeItem('subProfile'); }
 
+/* Remembers which site was picked last, purely to prefill the radio on the
+   next sign-in/submission — still changeable every time, not authoritative. */
+function getLastSite(){ return localStorage.getItem('lastSite') || ''; }
+function setLastSite(key){ localStorage.setItem('lastSite', key); }
+
 /* ---------- local state: current visit + recent activity ----------
    Tracked on-device rather than read back from Supabase, since reads now
    require an authenticated (admin) session. Written alongside every
@@ -75,14 +80,15 @@ async function createSubcontractor(profile){
 
 /* ---------- site visits (sign in / sign out) ---------- */
 /* `form` carries the daily sign-in questionnaire (see js/app.js
-   openSignInForm): crewCount, crewNames, hadOrientation, musterPoint,
-   fitForWork, signatureType ('drawn'|'typed'), signatureText,
+   openSignInForm): site, siteLabel, crewCount, crewNames, hadOrientation,
+   musterPoint, fitForWork, signatureType ('drawn'|'typed'), signatureText,
    signatureFileUrl. Requires the site_visits columns added by the
    migration in README — see "Daily sign-in form" there. */
 async function signIn(profile, form){
   const visit = {
     id: uid(), subcontractor_id: profile.id,
     subcontractor_name: profile.name, subcontractor_company: profile.company || null,
+    site: form.site,
     sign_in_at: new Date().toISOString(), sign_out_at: null,
     crew_count: form.crewCount, crew_names: form.crewNames,
     had_orientation: form.hadOrientation, muster_point: form.musterPoint,
@@ -96,11 +102,12 @@ async function signIn(profile, form){
     body: JSON.stringify(visit)
   });
   if(!res.ok) throw await apiError('Sign-in', res);
-  setCurrentVisit({ id: visit.id, sign_in_at: visit.sign_in_at });
-  pushActivityLog({ ts: visit.sign_in_at, label: `Signed in — crew of ${form.crewCount}` });
+  setCurrentVisit({ id: visit.id, sign_in_at: visit.sign_in_at, site: form.site, siteLabel: form.siteLabel });
+  pushActivityLog({ ts: visit.sign_in_at, label: `Signed in — crew of ${form.crewCount} (${form.siteLabel})` });
 }
 async function signOut(visitId){
   const signOutAt = new Date().toISOString();
+  const current = getCurrentVisit();
   const res = await fetch(`${SUPABASE_URL}/rest/v1/site_visits?id=eq.${encodeURIComponent(visitId)}`, {
     method: 'PATCH',
     headers: { ...SUPABASE_HEADERS, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
@@ -108,7 +115,23 @@ async function signOut(visitId){
   });
   if(!res.ok) throw await apiError('Sign-out', res);
   clearCurrentVisit();
-  pushActivityLog({ ts: signOutAt, label: 'Signed out' });
+  pushActivityLog({ ts: signOutAt, label: current && current.siteLabel ? `Signed out (${current.siteLabel})` : 'Signed out' });
+}
+
+/* Lets an admin close out someone else's visit from the Admin tab — for
+   when a subcontractor leaves without tapping "Sign Out" on their own
+   phone. Same open write as the subcontractor-facing signOut() above
+   (site_visits INSERT/UPDATE is open to the anon key), just triggered
+   from the admin's device instead, so it doesn't touch the subcontractor
+   local-state keys (current visit/activity log) those belong to their
+   phone, not the admin's. */
+async function adminSignOutVisit(visitId){
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/site_visits?id=eq.${encodeURIComponent(visitId)}`, {
+    method: 'PATCH',
+    headers: { ...SUPABASE_HEADERS, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+    body: JSON.stringify({ sign_out_at: new Date().toISOString() })
+  });
+  if(!res.ok) throw await apiError('Sign-out', res);
 }
 
 /* ---------- signature upload (drawn signature from the sign-in form) ---------- */
@@ -135,7 +158,7 @@ async function uploadDocFile(file){
   if(!res.ok) throw await apiError('Upload', res);
   return `${SUPABASE_URL}/storage/v1/object/public/${DOCS_BUCKET}/${path}`;
 }
-async function submitDocument(profile, type, fileUrl, notes, docTypeLabel){
+async function submitDocument(profile, type, fileUrl, notes, docTypeLabel, site, siteLabel){
   const uploadedAt = new Date().toISOString();
   const res = await fetch(`${SUPABASE_URL}/rest/v1/safety_documents`, {
     method: 'POST',
@@ -143,12 +166,12 @@ async function submitDocument(profile, type, fileUrl, notes, docTypeLabel){
     body: JSON.stringify({
       id: uid(), subcontractor_id: profile.id,
       subcontractor_name: profile.name, subcontractor_company: profile.company || null,
-      type, file_url: fileUrl, notes: notes || null,
+      site, type, file_url: fileUrl, notes: notes || null,
       uploaded_at: uploadedAt
     })
   });
   if(!res.ok) throw await apiError('Save submission', res);
-  pushActivityLog({ ts: uploadedAt, label: `Submitted: ${docTypeLabel}` });
+  pushActivityLog({ ts: uploadedAt, label: `Submitted: ${docTypeLabel} (${siteLabel})` });
 }
 
 /* ---------- admin auth (Supabase Auth, email + password) ----------
