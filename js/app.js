@@ -236,7 +236,8 @@ function openSignInForm(profile){
       <div class="sig-toggle"><a href="#" id="sigToggleDraw">Draw instead</a></div>
     </div>
 
-    <button class="btn" id="siSubmitBtn" style="width:100%; margin-top:16px;">Complete Sign-In</button>
+    <div id="siFormError" class="warning-box" style="display:none; margin-top:16px;"></div>
+    <button class="btn" id="siSubmitBtn" style="width:100%; margin-top:12px;">Complete Sign-In</button>
   `);
 
   const canvas = setupSignatureCanvas();
@@ -301,6 +302,7 @@ function setupSignatureCanvas(){
 }
 
 async function submitSignInForm(profile, canvas){
+  setFormError('siFormError', null);
   const site = document.querySelector('input[name="siSite"]:checked');
   const crewCount = document.getElementById('siCrewCount').value.trim();
   const crewNames = document.getElementById('siCrewNames').value.trim();
@@ -353,7 +355,10 @@ async function submitSignInForm(profile, canvas){
     refreshActivity();
   }catch(e){
     console.error(e);
-    showToast(e.message || "Couldn't sign in — check your connection and try again.");
+    const msg = e.message || "Couldn't sign in — check your connection and try again.";
+    showToast(msg);
+    setFormError('siFormError', `Not saved: ${msg}`);
+    setModalCloseGuard("This sign-in hasn't been saved yet. Are you sure you want to close without finishing?");
     btn.disabled = false; btn.textContent = 'Complete Sign-In';
   }
 }
@@ -369,7 +374,8 @@ function openSubmitModal(type){
     <img id="docPreview" class="file-preview" style="display:none;">
     <label>Notes (optional)</label>
     <textarea id="docNotes" placeholder="Anything the site super should know"></textarea>
-    <button class="btn" id="docSubmitBtn" style="width:100%; margin-top:14px;">Submit</button>
+    <div id="docFormError" class="warning-box" style="display:none; margin-top:14px;"></div>
+    <button class="btn" id="docSubmitBtn" style="width:100%; margin-top:12px;">Submit</button>
   `);
   const fileInput = document.getElementById('docFile');
   const preview = document.getElementById('docPreview');
@@ -383,6 +389,7 @@ function openSubmitModal(type){
     }
   };
   document.getElementById('docSubmitBtn').onclick = async ()=>{
+    setFormError('docFormError', null);
     const site = document.querySelector('input[name="docSite"]:checked');
     const file = fileInput.files[0];
     if(!site){ showToast('Select which site this is for.'); return; }
@@ -400,7 +407,10 @@ function openSubmitModal(type){
       refreshActivity();
     }catch(e){
       console.error(e);
-      showToast(e.message || "Couldn't submit — check your connection and try again.");
+      const msg = e.message || "Couldn't submit — check your connection and try again.";
+      showToast(msg);
+      setFormError('docFormError', `Not saved: ${msg}`);
+      setModalCloseGuard("This submission hasn't been saved yet. Are you sure you want to close without finishing?");
       btn.disabled = false; btn.textContent = 'Submit';
     }
   };

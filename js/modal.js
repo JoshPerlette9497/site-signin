@@ -10,6 +10,32 @@ function showModal(html){
 }
 function closeModal(){ const bg=document.getElementById('modalBg'); if(bg) bg.remove(); }
 
+/* Makes the × and outside-tap close require an explicit confirmation —
+   used after a save fails, so a trade in a hurry can't dismiss a failed
+   sign-in/submission by tapping past a toast that's already faded. Each
+   showModal() call rebuilds #modalClose/#modalBg from scratch, so this
+   guard never carries over into the next modal that's opened. */
+function setModalCloseGuard(msg){
+  const closeBtn = document.getElementById('modalClose');
+  const bg = document.getElementById('modalBg');
+  if(!closeBtn || !bg) return;
+  closeBtn.onclick = ()=>{ if(confirm(msg)) closeModal(); };
+  bg.onclick = (e)=>{ if(e.target===bg && confirm(msg)) closeModal(); };
+}
+
+/* Persistent (non-auto-dismissing) error banner inside the modal, for the
+   same reason as the guard above — a toast fades in a few seconds and can
+   be missed entirely; this stays until the next submit attempt either
+   clears it or replaces it. `elId` is a placeholder div already in the
+   form's HTML (e.g. right above its submit button). */
+function setFormError(elId, msg){
+  const el = document.getElementById(elId);
+  if(!el) return;
+  if(!msg){ el.style.display = 'none'; el.textContent = ''; return; }
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
 function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function showToast(msg){
