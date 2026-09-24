@@ -149,18 +149,24 @@ function refreshStatus(){
     el.innerHTML = `
       <div style="font-weight:700;">Signed in at ${t}</div>
       <button class="btn danger stack" id="signOutBtn">Sign Out</button>
+      <div id="signOutError" class="warning-box" style="display:none; margin-top:10px;"></div>
     `;
     document.getElementById('signOutBtn').onclick = async ()=>{
+      setFormError('signOutError', null);
       const btn = document.getElementById('signOutBtn');
       btn.disabled = true; btn.textContent = 'Signing out…';
       try{
-        await signOut(openVisit.id);
+        await withRetry(()=>signOut(openVisit.id), {
+          onRetry: (attempt, total)=>{ btn.textContent = `Signing out… (retry ${attempt - 1}/${total - 1})`; }
+        });
         showToast('Signed out. Have a safe trip home.');
         refreshStatus();
         refreshActivity();
       }catch(e){
         console.error(e);
-        showToast(e.message || "Couldn't sign out — check your connection and try again.");
+        const msg = e.message || "Couldn't sign out — check your connection and try again.";
+        showToast(msg);
+        setFormError('signOutError', `Not saved: ${msg} You're still shown as signed in above — tap Sign Out again once you have a signal.`);
         btn.disabled = false; btn.textContent = 'Sign Out';
       }
     };

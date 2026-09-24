@@ -36,6 +36,28 @@ function setFormError(elId, msg){
   el.style.display = 'block';
 }
 
+/* Retries a flaky write a couple of times before giving up — for the kind
+   of failure that's just bad signal leaving a job site, not a real error,
+   where the very next attempt a moment later often just works. Not used
+   for sign-in/submission (each retry would create a new server-side row
+   via a freshly generated id, risking a duplicate on a late-but-actually-
+   successful first attempt) — signOut()'s PATCH is safe to retry since
+   re-applying it is a no-op once it's already succeeded. */
+async function withRetry(fn, { attempts = 3, delayMs = 1200, onRetry } = {}){
+  let lastErr;
+  for(let i = 0; i < attempts; i++){
+    try{ return await fn(); }
+    catch(e){
+      lastErr = e;
+      if(i < attempts - 1){
+        if(onRetry) onRetry(i + 2, attempts);
+        await new Promise(resolve=>setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function showToast(msg){
