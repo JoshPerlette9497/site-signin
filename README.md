@@ -304,42 +304,57 @@ The Admin tab, once logged in, shows:
   (browser print → save as PDF works too, so the PDF is a self-contained
   record with the photos actually in it, not just links to them).
 
-## Daily activity email
-`.github/workflows/daily-digest.yml` runs `scripts/daily-digest.js` on a
-schedule (GitHub Actions, free) and emails a summary of the last 24 hours —
-every sign-in, sign-out, and submission, with crew/orientation/signature
-detail and submitted photos shown inline in the email — to whatever address
-you configure. It sends via [Resend](https://resend.com) rather than through
-your own Gmail/Outlook: sending *as* your real account needs OAuth consent
-that corporate IT often locks down, but nothing is required to *receive*
-email from a transactional sender like Resend — so this works with zero
-admin approval.
+## Real-time activity email
+Every sign-in, sign-out, and form submission emails you the instant it's
+saved — not on a delay, and not batched. This replaced an earlier once-a-day
+digest: the digest ran on a fixed schedule (evening, UTC), so anything from
+"this morning" wouldn't show up until that evening's run, which read as
+"nothing arrived" even though nothing was actually broken. Real-time avoids
+that entirely.
+
+**How it works:** subcontractors write straight to Supabase from their
+phone — there's no server in that path to trigger an email from on the app
+side. So the trigger lives in Postgres itself: `supabase/realtime-email-trigger.sql`
+adds a database trigger on `site_visits` and `safety_documents` that fires
+on every insert/update and calls [Resend](https://resend.com) directly via
+Supabase's `pg_net` extension, the instant the row is committed. Resend
+(rather than your own Gmail/Outlook) is used for the same reason as before:
+sending *as* your real account needs OAuth consent that corporate IT often
+locks down, but nothing is required to *receive* email from a transactional
+sender — so this needs zero admin approval.
+
+The whole notification path is wrapped in its own error handler — if
+Resend is down, the key is wrong, or anything else goes wrong in there, the
+sign-in or submission that triggered it has already been saved and is
+completely unaffected. A failed notification just logs a Postgres warning
+(Supabase dashboard → Logs → Postgres Logs) rather than doing anything to
+the app.
 
 **One-time setup:**
 1. Sign up free at [resend.com](https://resend.com) (personal account, no
    credit card, no org approval needed) and create an API key
-   (Dashboard → API Keys).
-2. Get your Supabase **service_role** secret key (Project Settings → API —
-   the same key described under "Admin accounts" above). This bypasses RLS,
-   which is fine here since it only ever runs inside GitHub's own runner,
-   never in a browser — but it must be treated as a secret, same rules as
-   everywhere else in this doc.
-3. In this repo: **Settings → Secrets and variables → Actions**, add three
-   repository secrets:
-   - `SUPABASE_SERVICE_ROLE_KEY` — from step 2
-   - `RESEND_API_KEY` — from step 1
-   - `DIGEST_TO_EMAIL` — the address that should receive the digest
-4. (Optional) Once you've verified a custom sending domain in Resend, add a
-   repository **variable** (not secret — it's not sensitive) named
-   `DIGEST_FROM_EMAIL` set to an address on that domain, so the email
-   doesn't come from Resend's shared `onboarding@resend.dev` address.
-5. That's it — it runs automatically at 22:00 UTC daily (edit the `cron`
-   line in the workflow file to change the time; cron is always UTC). To
-   test immediately without waiting: **Actions tab → Daily activity digest
-   → Run workflow**.
+   (Dashboard → API Keys) — reuse the one from the old digest setup if you
+   still have it.
+2. Open `supabase/realtime-email-trigger.sql` in this repo, fill in the
+   three placeholders near the top (`YOUR_RESEND_API_KEY`,
+   `YOUR_DESTINATION_EMAIL`, and optionally `YOUR_FROM_EMAIL`/
+   `onboarding@resend.dev`), then paste the **whole file** into the
+   Supabase dashboard's **SQL Editor → New query** and run it. Safe to
+   re-run any time (e.g. to rotate the key or change the destination
+   address) — every statement is written to be idempotent.
+3. That's it — the next sign-in, sign-out, or submission emails you within
+   seconds.
 
-Empty days still send, saying "No activity in the past 24 hours" — ask if
-you'd rather it skip sending entirely when there's nothing to report.
+To change the destination address or rotate the Resend key later, edit the
+three `YOUR_...` placeholders in step 2 of the SQL file (the `do $$ ... $$;`
+block) and re-run just that block, or the whole file — it's harmless
+either way.
+
+**Old daily digest:** `scripts/daily-digest.js` / `.github/workflows/daily-digest.yml`
+are kept around, but the schedule is disabled — real-time replaced it. The
+workflow still has a manual **Run workflow** button (Actions tab) if you
+ever want an on-demand same-day rollup instead of scrolling through
+individual emails.
 
 ## Regenerating the QR code
 `qr.html` has the QR SVG hardcoded, generated once with the `qrcode` npm

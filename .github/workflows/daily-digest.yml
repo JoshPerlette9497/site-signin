@@ -1,11 +1,11 @@
 name: Daily activity digest
 
+# The scheduled cron trigger is disabled — activity emails now fire in
+# real time, per event, straight from Supabase (see
+# supabase/realtime-email-trigger.sql) rather than once a day here. This
+# workflow is kept around only for workflow_dispatch, in case you ever
+# want to manually pull a same-day rollup on demand from the Actions tab.
 on:
-  schedule:
-    # 22:00 UTC = 6:00 PM Eastern Daylight Time (5:00 PM EST in winter).
-    # Cron is always UTC — adjust the hour here if you want a different
-    # local send time, or if the EST/EDT offset matters to you.
-    - cron: '0 22 * * *'
   workflow_dispatch: {} # lets you trigger a run manually from the Actions tab, to test
 
 jobs:
