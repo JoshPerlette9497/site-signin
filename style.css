@@ -29,6 +29,10 @@ main{padding:14px 14px 8px; max-width:480px; margin:0 auto;}
   margin:18px 4px 8px; font-weight:700;
 }
 .card{background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:8px;}
+/* Caps On Site Now to roughly 2-3 cards tall and scrolls internally past
+   that, so a long list (or one bloated by stale entries) can't push the
+   Activity section — what you actually check day to day — down the page. */
+#onSite{max-height:272px; overflow-y:auto; padding-right:2px;}
 .card.status-in{border-color:var(--stamp-green); background:#EAF6EE;}
 .card.status-out{border-color:var(--line);}
 .row{display:flex; justify-content:space-between; align-items:flex-start; gap:10px;}
@@ -121,4 +125,5 @@ nav.tabs button.active{color:var(--brand-dark); background:#E1EFEF;}
   .card{break-inside:avoid; border-color:#999;}
   .card.excluded{display:none;}
   body{padding-bottom:0;}
+  #onSite{max-height:none; overflow:visible;}
 }
