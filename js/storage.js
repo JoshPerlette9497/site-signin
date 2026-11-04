@@ -105,13 +105,24 @@ async function signIn(profile, form){
   setCurrentVisit({ id: visit.id, sign_in_at: visit.sign_in_at, site: form.site, siteLabel: form.siteLabel });
   pushActivityLog({ ts: visit.sign_in_at, label: `Signed in — crew of ${form.crewCount} (${form.siteLabel})` });
 }
+/* Goes through the sign_out_visit() RPC (see supabase/ — add_sign_out_visit_rpc
+   migration) rather than a direct PATCH on site_visits. A plain PATCH here
+   silently matches zero rows: Postgres RLS requires SELECT visibility on a
+   row to target it with UPDATE, even when the UPDATE policy's own USING
+   clause is `true`, and the anon key this app writes with has no SELECT
+   policy on site_visits at all (reads are intentionally gated behind an
+   authenticated admin login). PostgREST still returns a "successful" 204
+   for a zero-row PATCH, so this failed completely silently — no sign-out
+   from any subcontractor, ever, actually took effect before this existed.
+   The RPC runs with elevated privilege for just this one write, without
+   opening up any read access. */
 async function signOut(visitId){
   const signOutAt = new Date().toISOString();
   const current = getCurrentVisit();
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/site_visits?id=eq.${encodeURIComponent(visitId)}`, {
-    method: 'PATCH',
-    headers: { ...SUPABASE_HEADERS, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
-    body: JSON.stringify({ sign_out_at: signOutAt })
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/sign_out_visit`, {
+    method: 'POST',
+    headers: { ...SUPABASE_HEADERS, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_visit_id: visitId })
   });
   if(!res.ok) throw await apiError('Sign-out', res);
   clearCurrentVisit();
@@ -125,11 +136,14 @@ async function signOut(visitId){
    from the admin's device instead, so it doesn't touch the subcontractor
    local-state keys (current visit/activity log) those belong to their
    phone, not the admin's. */
+/* Same sign_out_visit() RPC as signOut() above, and for the same reason —
+   this is the admin device writing with the same anon key, so it hits the
+   identical RLS gap a direct PATCH can't get past. */
 async function adminSignOutVisit(visitId){
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/site_visits?id=eq.${encodeURIComponent(visitId)}`, {
-    method: 'PATCH',
-    headers: { ...SUPABASE_HEADERS, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
-    body: JSON.stringify({ sign_out_at: new Date().toISOString() })
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/sign_out_visit`, {
+    method: 'POST',
+    headers: { ...SUPABASE_HEADERS, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_visit_id: visitId })
   });
   if(!res.ok) throw await apiError('Sign-out', res);
 }
