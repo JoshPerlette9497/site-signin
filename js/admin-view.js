@@ -113,24 +113,95 @@ async function fetchSubVisits(){
 async function fetchSubDocs(){
   return adminFetch('/rest/v1/safety_documents?order=uploaded_at.desc&limit=1000&select=*');
 }
+async function fetchSafetyForms(){
+  return adminFetch('/rest/v1/safety_forms?order=submitted_at.desc&limit=1000&select=*');
+}
 
 const MUSTER_LABELS = { site_office: 'Site Office', '81st_street': '81st Street SW' };
 
 /* One checkbox per row type in the Filters panel; `key` matches the
-   `label` mergeActivity assigns below, so filtering is a plain Set lookup. */
+   `label` mergeActivity assigns below, so filtering is a plain Set lookup.
+   The safety-form entries are generated from SAFETY_FORMS (js/app.js) so
+   the next form Josh adds there (a Hazard Assessment, a Machine Pre-Trip
+   Checklist) gets a filter chip automatically, no edit needed here. */
 const TYPE_FILTERS = [
   { key: 'Signed in', label: 'Sign In' },
   { key: 'Signed out', label: 'Sign Out' },
   { key: `Submitted: ${DOC_TYPES.hazard_assessment}`, label: 'Hazard Assessment' },
   { key: `Submitted: ${DOC_TYPES.equipment_cert}`, label: 'Equipment Cert' },
-  { key: `Submitted: ${DOC_TYPES.incident_report}`, label: 'Incident Report' }
+  { key: `Submitted: ${DOC_TYPES.incident_report}`, label: 'Incident Report' },
+  ...Object.values(SAFETY_FORMS).map(schema => ({ key: `Submitted: ${schema.label}`, label: schema.label }))
 ];
 
 function isImageUrl(url){
   return /\.(jpe?g|png|gif|webp|heic|heif)(\?|$)/i.test(url || '');
 }
 
-function mergeActivity(visits, docs){
+/* ---------- structured safety form review (SAFETY_FORMS, js/app.js) ---------- */
+function renderSafetyAnswersHtml(form){
+  const schema = SAFETY_FORMS[form.form_type];
+  if(!schema) return '';
+  return schema.sections.map(section=>{
+    const rows = section.fields
+      .filter(f => f.type !== 'site' && form.answers[f.id] !== undefined)
+      .map(f=>{
+        const raw = form.answers[f.id];
+        const display = f.type === 'ack' ? 'Acknowledged' : (f.type === 'yesno' ? (raw === 'yes' ? 'Yes' : 'No') : escapeHtml(String(raw)));
+        return `<div style="padding:4px 0; border-bottom:1px solid var(--line); font-size:12px;"><strong>${escapeHtml(f.label)}</strong><br>${display}</div>`;
+      }).join('');
+    if(!rows) return '';
+    return `<div style="margin-top:10px; font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; color:var(--ink-dim);">${escapeHtml(section.title)}</div>${rows}`;
+  }).join('');
+}
+
+/* Countersigning requires a real admin login (see the "authenticated
+   countersign safety_forms" RLS policy in supabase/) — deliberately not
+   open to the public anon key the worker's own submission used, since
+   this step is meant to mean a real Site Safety Representative actually
+   reviewed it. */
+function openCountersignModal(formId){
+  const session = getAdminSession();
+  const guessedName = session && session.email
+    ? session.email.split('@')[0].replace(/[._]+/g, ' ').replace(/\b\w/g, c=>c.toUpperCase())
+    : '';
+  showModal(`
+    <h2>Countersign as Site Safety Representative</h2>
+    <div class="helptext" style="margin-bottom:10px;">Confirms you reviewed this orientation with the worker and it's complete and accurate.</div>
+    <label>Your Name *</label>
+    <input type="text" id="csName" value="${escapeHtml(guessedName)}">
+    ${signatureBlockHtml('csSig', 'Your Signature')}
+    <div id="csFormError" class="warning-box" style="display:none; margin-top:16px;"></div>
+    <button class="btn" id="csSubmitBtn" style="width:100%; margin-top:12px;">Countersign</button>
+  `);
+  const canvas = wireSignatureBlock('csSig');
+  document.getElementById('csSubmitBtn').onclick = async ()=>{
+    setFormError('csFormError', null);
+    const name = document.getElementById('csName').value.trim();
+    if(!name){ showToast('Enter your name.'); return; }
+    const sig = readSignatureBlock('csSig', canvas);
+    if(!sig.signed){ showToast('Sign in the box, or tap "Type instead."'); return; }
+    const btn = document.getElementById('csSubmitBtn');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try{
+      const { signatureType, signatureText, signatureFileUrl } = await uploadSignatureFields(sig);
+      await countersignSafetyForm(formId, name, signatureType, signatureText, signatureFileUrl);
+      const form = allSafetyForms.find(f=>f.id === formId);
+      if(form){ form.countersigned_by = name; form.countersigned_at = new Date().toISOString(); }
+      closeModal();
+      showToast('Countersigned.');
+      renderAdminFiltered();
+    }catch(e){
+      console.error(e);
+      const msg = e.message || "Couldn't save — check your connection and try again.";
+      showToast(msg);
+      setFormError('csFormError', `Not saved: ${msg}`);
+      setModalCloseGuard("This countersign hasn't been saved yet. Are you sure you want to close without finishing?");
+      btn.disabled = false; btn.textContent = 'Countersign';
+    }
+  };
+}
+
+function mergeActivity(visits, docs, safetyForms){
   return [
     ...visits.map(v=>({
       id: `${v.id}_in`, ts: v.sign_in_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed in',
@@ -140,12 +211,19 @@ function mergeActivity(visits, docs){
       signatureType: v.signature_type, signatureText: v.signature_text, signatureUrl: v.signature_file_url
     })),
     ...visits.filter(v=>v.sign_out_at).map(v=>({ id: `${v.id}_out`, ts: v.sign_out_at, name: v.subcontractor_name, company: v.subcontractor_company, label: 'Signed out', site: v.site })),
-    ...docs.map(d=>({ id: d.id, ts: d.uploaded_at, name: d.subcontractor_name, company: d.subcontractor_company, label: `Submitted: ${DOC_TYPES[d.type] || d.type}`, site: d.site, url: d.file_url, notes: d.notes }))
+    ...docs.map(d=>({ id: d.id, ts: d.uploaded_at, name: d.subcontractor_name, company: d.subcontractor_company, label: `Submitted: ${DOC_TYPES[d.type] || d.type}`, site: d.site, url: d.file_url, notes: d.notes })),
+    ...safetyForms.map(f=>({
+      id: f.id, ts: f.submitted_at, name: f.subcontractor_name, company: f.subcontractor_company,
+      label: `Submitted: ${(SAFETY_FORMS[f.form_type] && SAFETY_FORMS[f.form_type].label) || f.form_type}`,
+      site: f.site, safetyForm: f,
+      notes: f.countersigned_by ? `Countersigned by ${f.countersigned_by}` : 'Awaiting countersign — see Admin tab',
+      signatureType: f.signature_type, signatureText: f.signature_text, signatureUrl: f.signature_file_url
+    }))
   ].sort((a,b)=> new Date(b.ts) - new Date(a.ts));
 }
 
 /* ---------- dashboard ---------- */
-let allVisits = [], allDocs = [];
+let allVisits = [], allDocs = [], allSafetyForms = [];
 /* Ids the user has unchecked via the per-row "include in export" checkbox
    — everything else is included by default. Persists across filter/date
    changes within one dashboard load; reset on next fetch. */
@@ -226,7 +304,7 @@ async function renderAdminDashboard(){
   document.getElementById('printBtn').onclick = ()=>window.print();
 
   try{
-    [allVisits, allDocs] = await Promise.all([fetchSubVisits(), fetchSubDocs()]);
+    [allVisits, allDocs, allSafetyForms] = await Promise.all([fetchSubVisits(), fetchSubDocs(), fetchSafetyForms()]);
   }catch(e){
     console.error('admin load failed', e);
     if(String(e.message).includes('signed in') || String(e.message).includes('expired')){
@@ -269,7 +347,7 @@ function getVisibleItems(){
   const activeSites = new Set(
     Array.from(document.querySelectorAll('#siteChips input:checked')).map(cb => cb.value)
   );
-  return mergeActivity(allVisits, allDocs).filter(it=>{
+  return mergeActivity(allVisits, allDocs, allSafetyForms).filter(it=>{
     const t = new Date(it.ts).getTime();
     if(t < fromTs || t > toTs) return false;
     if(!activeTypes.has(it.label)) return false;
@@ -351,6 +429,14 @@ function renderAdminActivityList(items){
         ? `<img src="${escapeHtml(it.url)}" class="attachment-thumb" alt="Submitted file">`
         : `<div class="divider" style="margin:8px 0;"></div><a href="${escapeHtml(it.url)}" target="_blank">View submitted file</a>`
       ) : ''}
+      ${it.safetyForm ? `
+        <div class="divider no-print" style="margin:8px 0;"></div>
+        <a href="#" class="no-print sf-view-toggle" data-id="${escapeHtml(it.id)}">View full form</a>
+        <div class="sf-answers" id="sfAnswers_${escapeHtml(it.id)}" style="display:none; margin-top:6px;">${renderSafetyAnswersHtml(it.safetyForm)}</div>
+        ${it.safetyForm.countersigned_by
+          ? `<div class="item-meta" style="margin-top:8px;">Countersigned by ${escapeHtml(it.safetyForm.countersigned_by)} on ${new Date(it.safetyForm.countersigned_at).toLocaleDateString('en-US')}</div>`
+          : `<button class="btn ghost no-print countersign-btn" data-form-id="${escapeHtml(it.safetyForm.id)}" style="width:100%; margin-top:10px;">Countersign as Site Safety Representative</button>`}
+      ` : ''}
     </div>
   `).join('');
   el.querySelectorAll('.row-checkbox').forEach(cb=>{
@@ -360,6 +446,18 @@ function renderAdminActivityList(items){
       if(cb.checked){ excludedIds.delete(id); card.classList.remove('excluded'); }
       else { excludedIds.add(id); card.classList.add('excluded'); }
     };
+  });
+  el.querySelectorAll('.sf-view-toggle').forEach(a=>{
+    a.onclick = (e)=>{
+      e.preventDefault();
+      const box = document.getElementById(`sfAnswers_${a.dataset.id}`);
+      const showing = box.style.display !== 'none';
+      box.style.display = showing ? 'none' : 'block';
+      a.textContent = showing ? 'View full form' : 'Hide full form';
+    };
+  });
+  el.querySelectorAll('.countersign-btn').forEach(btn=>{
+    btn.onclick = ()=>openCountersignModal(btn.dataset.formId);
   });
 }
 

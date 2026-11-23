@@ -17,6 +17,9 @@ choice, to avoid provisioning a second one), in its own tables.
   Incident Report — photographed or scanned from the phone, uploaded
   straight from the browser (`<input capture="environment">` opens the
   camera directly on mobile).
+- **Safety Forms** — filled out directly in the app rather than uploaded as
+  a photo. Site Safety Orientation is the first; see "Structured safety
+  forms" below — more are coming the same way.
 - **One-time profile, remembered per phone.** First visit asks for name,
   company, trade, phone; saved to `localStorage` so every later visit on
   that phone skips straight to sign-in. "Not you? Switch profile" clears it
@@ -224,6 +227,84 @@ of the audit record — not just "so-and-so signed in at 7:03am."
 
 Sign-out stays a single tap — no questionnaire, since the crew/orientation
 info doesn't change mid-day.
+
+## Structured safety forms (Site Safety Orientation, and more to come)
+A second kind of form, distinct from "Submit a form" above: instead of
+photographing a paper form, the worker fills it out directly in the app —
+same idea as the Daily Sign-In questionnaire, just a longer one. Site Safety
+Orientation is the first; Josh plans a Hazard Assessment and a Machine
+Pre-Trip Checklist the same way, as an in-app alternative to uploading a
+photo of a filled-out paper copy (the photo-upload "Hazard Assessment"
+button stays — this is an additional way to submit one, not a replacement).
+
+**Built as data, not one-off code**, specifically so those next two don't
+mean starting over: `SAFETY_FORMS` in `js/app.js` is a registry of form
+types, each a list of sections/fields (text, yes/no, a single
+acknowledgment checkbox, a radio group, or a textarea), rendered and
+validated by one generic engine. Adding the next form means adding a new
+key to `SAFETY_FORMS` with its own field list — translated from whatever
+PDF Josh uploads — not new plumbing. Submissions land in a single
+`safety_forms` table (`form_type` + a `answers` jsonb blob holding whatever
+fields that type defines), so a new form type needs no schema migration
+either.
+
+**Two judgment calls worth knowing about, both easy to change:**
+- The paper Site Safety Orientation form has the worker sign **and** a Site
+  Safety Representative sign, normally together in person. In the app, the
+  worker fills out and signs the whole thing alone on their own phone; a
+  rep countersigns it **separately**, afterward, from the Admin tab (see
+  below) — not in the same session, since the two don't always go through
+  it together. This needs a real admin login to do (see "Countersigning"
+  below), unlike every other write in this app, which is open to the
+  public anon key.
+- The form has a few questions explicitly marked on the paper version as
+  "must be addressed before work starts" if answered "No" (new/young
+  worker orientation, hazard awareness, fall protection certification).
+  Answering "No" to any of these **blocks submission** with a warning,
+  the same way the sign-in form already blocks on a wrong muster point or
+  "not fit for work" — matching the paper form's own wording, not an
+  invented rule. Ask if you'd rather this just warn instead of block.
+
+**Countersigning**, from the Admin tab: any orientation submission shows a
+"Countersign as Site Safety Representative" button until someone does —
+name + signature, same component as everywhere else — after which it shows
+"Countersigned by X on [date]" instead. This is an authenticated-only write
+(a dedicated RLS policy, not the open-to-anon one every subcontractor
+write uses), so it genuinely requires a real logged-in admin account, not
+just anyone holding the app's public key. Every submission's full answers
+are also visible from "View full form" on its Activity row, in case
+something needs a closer look.
+
+### Migration: safety_forms table
+Already applied directly to the live Supabase project — included here for
+reference/reproducibility, matching every other migration in this file:
+```sql
+create table public.safety_forms (
+  id text primary key,
+  subcontractor_id text not null,
+  subcontractor_name text,
+  subcontractor_company text,
+  site text,
+  form_type text not null,
+  answers jsonb not null,
+  signature_type text,
+  signature_text text,
+  signature_file_url text,
+  submitted_at timestamptz not null default now(),
+  countersigned_by text,
+  countersigned_at timestamptz,
+  countersign_signature_type text,
+  countersign_signature_text text,
+  countersign_signature_file_url text
+);
+alter table public.safety_forms enable row level security;
+create policy "public insert safety_forms" on public.safety_forms
+  for insert to public with check (true);
+create policy "authenticated select safety_forms" on public.safety_forms
+  for select to authenticated using (true);
+create policy "authenticated countersign safety_forms" on public.safety_forms
+  for update to authenticated using (true) with check (true);
+```
 
 ## Admin accounts (Admin tab) — real per-person logins
 The Admin tab requires signing in with a Supabase Auth account. This is a

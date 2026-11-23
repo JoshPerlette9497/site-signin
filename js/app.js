@@ -106,6 +106,12 @@ async function renderHome(){
     <div class="section-title">Site Status</div>
     <div class="card" id="statusCard"><div class="helptext">Checking status…</div></div>
 
+    <div class="section-title">Safety Forms</div>
+    <div class="card">
+      <button class="btn ghost stack" data-safetyform="site_orientation">Site Safety Orientation</button>
+    </div>
+    <div class="helptext" style="margin:0 4px 4px;">Fill this out right on your phone — no paper, no photo needed.</div>
+
     <div class="section-title">Submit a Form</div>
     <div class="card">
       <button class="btn ghost stack" data-doctype="hazard_assessment">Hazard Assessment</button>
@@ -129,6 +135,9 @@ async function renderHome(){
   };
   document.querySelectorAll('[data-doctype]').forEach(btn=>{
     btn.onclick = ()=>openSubmitModal(btn.dataset.doctype);
+  });
+  document.querySelectorAll('[data-safetyform]').forEach(btn=>{
+    btn.onclick = ()=>openSafetyForm(btn.dataset.safetyform, profile);
   });
   wireInstallHint();
 
@@ -231,34 +240,13 @@ function openSignInForm(profile){
       You can't sign in without confirming this. If you're not fit for work today, please speak with your site supervisor before entering the site.
     </div>
 
-    <label>Signature *</label>
-    <div class="sig-toggle"><a href="#" id="sigToggleType">Type instead</a></div>
-    <div id="sigDrawWrap">
-      <canvas id="sigCanvas" class="sig-canvas"></canvas>
-      <button class="btn ghost small" id="sigClearBtn" style="margin-top:6px;">Clear</button>
-    </div>
-    <div id="sigTypeWrap" style="display:none;">
-      <input id="sigTypedInput" type="text" placeholder="Type your full name" class="sig-typed-input">
-      <div class="sig-toggle"><a href="#" id="sigToggleDraw">Draw instead</a></div>
-    </div>
+    ${signatureBlockHtml('sig', 'Signature')}
 
     <div id="siFormError" class="warning-box" style="display:none; margin-top:16px;"></div>
     <button class="btn" id="siSubmitBtn" style="width:100%; margin-top:12px;">Complete Sign-In</button>
   `);
 
-  const canvas = setupSignatureCanvas();
-  document.getElementById('sigClearBtn').onclick = ()=>canvas.clearSig();
-  document.getElementById('sigToggleType').onclick = (e)=>{
-    e.preventDefault();
-    document.getElementById('sigDrawWrap').style.display = 'none';
-    document.getElementById('sigTypeWrap').style.display = 'block';
-    document.getElementById('sigTypedInput').focus();
-  };
-  document.getElementById('sigToggleDraw').onclick = (e)=>{
-    e.preventDefault();
-    document.getElementById('sigTypeWrap').style.display = 'none';
-    document.getElementById('sigDrawWrap').style.display = 'block';
-  };
+  const canvas = wireSignatureBlock('sig');
   document.querySelectorAll('input[name="siMuster"]').forEach(r=>{
     r.onchange = ()=>{ document.getElementById('siMusterWarning').style.display = 'none'; };
   });
@@ -269,9 +257,57 @@ function openSignInForm(profile){
   document.getElementById('siSubmitBtn').onclick = ()=>submitSignInForm(profile, canvas);
 }
 
+/* ---------- reusable signature block (draw or type) ----------
+   Used wherever something needs a signature: the Daily Sign-In form, the
+   Site Safety Orientation form's worker signature, and the Admin tab's
+   countersign flow (js/admin-view.js). `id` prefixes every element so
+   more than one independent signature pad can exist in the same modal —
+   e.g. worker signs one, a site safety rep signs a separate one later. */
+function signatureBlockHtml(id, label){
+  return `
+    <label>${escapeHtml(label)} *</label>
+    <div class="sig-toggle"><a href="#" id="${id}ToggleType">Type instead</a></div>
+    <div id="${id}DrawWrap">
+      <canvas id="${id}Canvas" class="sig-canvas"></canvas>
+      <button class="btn ghost small" id="${id}ClearBtn" style="margin-top:6px;">Clear</button>
+    </div>
+    <div id="${id}TypeWrap" style="display:none;">
+      <input id="${id}TypedInput" type="text" placeholder="Type your full name" class="sig-typed-input">
+      <div class="sig-toggle"><a href="#" id="${id}ToggleDraw">Draw instead</a></div>
+    </div>
+  `;
+}
+function wireSignatureBlock(id){
+  const canvas = setupSignatureCanvas(`${id}Canvas`);
+  document.getElementById(`${id}ClearBtn`).onclick = ()=>canvas.clearSig();
+  document.getElementById(`${id}ToggleType`).onclick = (e)=>{
+    e.preventDefault();
+    document.getElementById(`${id}DrawWrap`).style.display = 'none';
+    document.getElementById(`${id}TypeWrap`).style.display = 'block';
+    document.getElementById(`${id}TypedInput`).focus();
+  };
+  document.getElementById(`${id}ToggleDraw`).onclick = (e)=>{
+    e.preventDefault();
+    document.getElementById(`${id}TypeWrap`).style.display = 'none';
+    document.getElementById(`${id}DrawWrap`).style.display = 'block';
+  };
+  return canvas;
+}
+/* Reads back whichever mode (draw/type) is active for a block built by
+   signatureBlockHtml/wireSignatureBlock above. { signed: false } if
+   nothing's actually been signed yet in either mode. */
+function readSignatureBlock(id, canvas){
+  const typing = document.getElementById(`${id}TypeWrap`).style.display !== 'none';
+  if(typing){
+    const text = document.getElementById(`${id}TypedInput`).value.trim();
+    return text ? { signed: true, type: 'typed', text } : { signed: false };
+  }
+  return canvas.hasStrokes() ? { signed: true, type: 'drawn', canvas } : { signed: false };
+}
+
 /* Pointer-event canvas signature pad — works with touch, mouse, and stylus. */
-function setupSignatureCanvas(){
-  const canvas = document.getElementById('sigCanvas');
+function setupSignatureCanvas(canvasId = 'sigCanvas'){
+  const canvas = document.getElementById(canvasId);
   const ctx = canvas.getContext('2d');
   const ratio = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
@@ -307,6 +343,17 @@ function setupSignatureCanvas(){
   return canvas;
 }
 
+/* Turns a readSignatureBlock() result into the {signatureType,
+   signatureText, signatureFileUrl} shape every signing write stores —
+   uploads the drawn-signature blob if that's the mode in use. Shared by
+   the Daily Sign-In form and the Site Safety Orientation form. */
+async function uploadSignatureFields(sig){
+  if(sig.type === 'typed') return { signatureType: 'typed', signatureText: sig.text, signatureFileUrl: null };
+  const blob = await new Promise(resolve=>sig.canvas.toBlob(resolve, 'image/png'));
+  const signatureFileUrl = await uploadSignatureBlob(blob);
+  return { signatureType: 'drawn', signatureText: null, signatureFileUrl };
+}
+
 async function submitSignInForm(profile, canvas){
   setFormError('siFormError', null);
   const site = document.querySelector('input[name="siSite"]:checked');
@@ -315,8 +362,7 @@ async function submitSignInForm(profile, canvas){
   const orientation = document.querySelector('input[name="siOrientation"]:checked');
   const muster = document.querySelector('input[name="siMuster"]:checked');
   const fit = document.querySelector('input[name="siFit"]:checked');
-  const typing = document.getElementById('sigTypeWrap').style.display !== 'none';
-  const typedSig = document.getElementById('sigTypedInput').value.trim();
+  const sig = readSignatureBlock('sig', canvas);
 
   if(!site){ showToast('Select which site you\'re signing into.'); return; }
   if(!crewCount || Number(crewCount) < 1){ showToast('Enter how many workers are on your crew today.'); return; }
@@ -332,20 +378,12 @@ async function submitSignInForm(profile, canvas){
     document.getElementById('siFitWarning').style.display = 'block';
     return;
   }
-  if(!typing && !canvas.hasStrokes()){ showToast('Sign in the box, or tap "Type instead."'); return; }
-  if(typing && !typedSig){ showToast('Type your name to sign.'); return; }
+  if(!sig.signed){ showToast('Sign in the box, or tap "Type instead."'); return; }
 
   const btn = document.getElementById('siSubmitBtn');
   btn.disabled = true; btn.textContent = 'Signing in…';
   try{
-    let signatureType, signatureText = null, signatureFileUrl = null;
-    if(typing){
-      signatureType = 'typed'; signatureText = typedSig;
-    } else {
-      signatureType = 'drawn';
-      const blob = await new Promise(resolve=>canvas.toBlob(resolve, 'image/png'));
-      signatureFileUrl = await uploadSignatureBlob(blob);
-    }
+    const { signatureType, signatureText, signatureFileUrl } = await uploadSignatureFields(sig);
     await signIn(profile, {
       site: site.value, siteLabel: SITE_LABELS[site.value],
       crewCount: Number(crewCount), crewNames,
@@ -418,6 +456,241 @@ function openSubmitModal(type){
       setFormError('docFormError', `Not saved: ${msg}`);
       setModalCloseGuard("This submission hasn't been saved yet. Are you sure you want to close without finishing?");
       btn.disabled = false; btn.textContent = 'Submit';
+    }
+  };
+}
+
+/* ---------- structured safety forms ----------
+   Filled out entirely in-app rather than uploaded as a photo of a paper
+   form (see "Submit a Form" above for that older flow). Site Safety
+   Orientation is the first of these — Josh plans a Hazard Assessment and
+   a Machine Pre-Trip Checklist the same way, so this is built as data
+   (SAFETY_FORMS) plus one generic renderer/validator/submit flow rather
+   than bespoke code per form. Adding the next one means adding a new key
+   here, not new plumbing.
+
+   Each form's worker side is self-contained and signed by the worker
+   alone — a Site Safety Representative countersigns separately afterward
+   from the Admin tab (js/admin-view.js), not in the same session, since
+   the two don't always fill this out together in person. */
+const SAFETY_FORMS = {
+  site_orientation: {
+    label: 'Site Safety Orientation',
+    submitLabel: 'Complete Orientation',
+    sections: [
+      { title: 'Worker Information', fields: [
+        { id: 'site', type: 'site', label: 'Project / Site', required: true },
+        { id: 'workerName', type: 'text', label: 'Name', required: true, prefillFrom: 'name' },
+        { id: 'company', type: 'text', label: 'Company', required: true, prefillFrom: 'company' },
+        { id: 'position', type: 'text', label: 'Position', required: true, prefillFrom: 'trade' },
+        { id: 'phone', type: 'text', label: 'Phone', required: true, prefillFrom: 'phone' },
+        { id: 'emergencyContact', type: 'text', label: 'Emergency Contact Name', required: true },
+        { id: 'emergencyContactPhone', type: 'text', label: 'Emergency Contact Phone', required: true },
+        { id: 'emergencyContactRelation', type: 'text', label: 'Relation to Contact', required: true }
+      ] },
+      { title: 'Minimum Safety Requirements', fields: [
+        { id: 'q1_newYoungWorker', type: 'yesno', label: 'Are you a New/Young worker as defined by WorkSafe (under 25 years old, new to the company, or new to a task)?', required: true },
+        { id: 'q1a_orientationGiven', type: 'yesno', label: 'If yes: has your employer given you a safety orientation/training, and do you have a clear understanding of your duties on site?', required: true, showIf: { field: 'q1_newYoungWorker', equals: 'yes' }, blockIfNo: true },
+        { id: 'q2_hazardsAware', type: 'yesno', label: 'Are you aware of hazards associated with your work, and has your employer provided you with the tools to safely complete it?', required: true, blockIfNo: true },
+        { id: 'q2_hazardsWhat', type: 'textarea', label: 'What are they?', required: true },
+        { id: 'q3_fallProtectionRequired', type: 'yesno', label: 'Does your scope of work require you to use fall protection?', required: true },
+        { id: 'q3a_fallProtectionCertified', type: 'yesno', label: 'If yes: has your employer provided you with the necessary certification and equipment?', required: true, showIf: { field: 'q3_fallProtectionRequired', equals: 'yes' }, blockIfNo: true }
+      ], blockNote: 'If "No" to any of the above, your employer must address it before you begin work associated with it.' },
+      { title: 'Safe Work Practices', fields: [
+        { id: 'ack_ladders', type: 'ack', label: "Ladders (grade 1, legible manufacturer's labels, and inspected for cracked or broken rungs)", required: true },
+        { id: 'ack_repetitiveTasks', type: 'ack', label: 'Watch for signs and symptoms from repetitive tasks (numbness, tingling, redness or swelling) and report them to your supervisor', required: true },
+        { id: 'ack_dangerCautionTape', type: 'ack', label: 'Danger and Caution taped areas on site', required: true },
+        { id: 'ack_mobileEquipment', type: 'ack', label: 'Mobile equipment (PPE and eye contact)', required: true },
+        { id: 'ack_housekeeping', type: 'ack', label: 'Housekeeping/cleanup requirements of your work area — failure to do so may be followed by a fine', required: true },
+        { id: 'ack_courtesy', type: 'ack', label: 'Courtesy to the general public', required: true },
+        { id: 'firstAid_has', type: 'yesno', label: 'Do you have a current first aid certificate?', required: true },
+        { id: 'firstAid_level', type: 'radio', label: 'Level', required: true, showIf: { field: 'firstAid_has', equals: 'yes' }, options: [{ value: '1', label: '1' }, { value: '2', label: '2' }, { value: '3', label: '3' }] },
+        { id: 'whmis_has', type: 'yesno', label: 'Do you have WHMIS training?', required: true }
+      ] },
+      { title: 'Safety Absolutes', fields: [
+        { id: 'ack_zeroToleranceDrugs', type: 'ack', label: 'Drugs/alcohol/smoking on site = ZERO TOLERANCE', required: true },
+        { id: 'ack_zeroToleranceViolence', type: 'ack', label: 'Violence in the workplace, bullying and harassment = ZERO TOLERANCE', required: true }
+      ] },
+      { title: 'General Safety Requirements', fields: [
+        { id: 'ack_adherePolicy', type: 'ack', label: 'Adhere to the Slokker Homes Safety Program and Policies and comply with all WorkSafe regulations', required: true },
+        { id: 'ack_rightToRefuse', type: 'ack', label: 'You have the right to refuse unsafe work', required: true },
+        { id: 'ack_correctHazards', type: 'ack', label: 'Responsibility to correct safety hazards', required: true },
+        { id: 'ack_reportUnsafe', type: 'ack', label: 'Reporting unsafe acts and conditions', required: true },
+        { id: 'ack_reportInjuries', type: 'ack', label: 'Reporting accidents/injuries', required: true },
+        { id: 'ack_ppe', type: 'ack', label: 'Personal Protective Equipment (PPE)', required: true },
+        { id: 'ack_clothing', type: 'ack', label: 'Proper clothing required', required: true },
+        { id: 'ack_toolboxTalks', type: 'ack', label: 'Attend all toolbox talks', required: true },
+        { id: 'ack_accessRoutes', type: 'ack', label: 'Access routes to remain clear', required: true },
+        { id: 'ack_radios', type: 'ack', label: 'Radios permitted @ low volume, NO EAR BUDS', required: true },
+        { id: 'ack_noSmoking', type: 'ack', label: 'No smoking or vaping except in designated area', required: true }
+      ] },
+      { title: 'Slokker Homes Safety Policy', fields: [
+        { id: 'policy_disciplinaryExplained', type: 'yesno', label: 'Has the Slokker Homes disciplinary policy been explained?', required: true },
+        { id: 'policy_disciplinaryUnderstood', type: 'yesno', label: 'Do you understand and accept the Slokker Homes disciplinary policy regarding safety absolutes?', required: true },
+        { id: 'policy_siteRulesAgree', type: 'yesno', label: 'Do you understand and agree to abide by the general site rules?', required: true }
+      ] },
+      { title: 'Emergency Procedures', fields: [
+        { id: 'ack_jobSiteMap', type: 'ack', label: 'Job site map and Safety Board — reviewed', required: true },
+        { id: 'ack_musterLocation', type: 'ack', label: 'Job site Muster Location(s) — reviewed', required: true },
+        { id: 'ack_emergencyProcedures', type: 'ack', label: 'Job site emergency procedures reviewed: 3 blasts = First Aid, 2 blasts = Fire, 1 blast = Evacuation', required: true }
+      ] },
+      { title: 'Allergies / Medication or Conditions', fields: [
+        { id: 'allergiesNotes', type: 'textarea', label: 'Anything we should know about? Write "None" if not applicable', required: true }
+      ] }
+    ],
+    acknowledgment: 'I have read, understand, and will comply with the Slokker Homes Safety Program & Procedures, the details of this orientation, current Occupational Health & Safety (OH&S) Regulation and site directives.'
+  }
+};
+
+function sfFieldName(id){ return `sf_${id}`; }
+
+function renderSafetyField(field, profile){
+  const name = sfFieldName(field.id);
+  const wrapAttrs = field.showIf ? ` data-show-if-field="${sfFieldName(field.showIf.field)}" data-show-if-equals="${escapeHtml(field.showIf.equals)}" style="display:none;"` : '';
+  let inner;
+  if(field.type === 'site'){
+    inner = `<label>${escapeHtml(field.label)}${field.required ? ' *' : ''}</label><div class="radio-row">${siteRadioRow(name, getLastSite())}</div>`;
+  } else if(field.type === 'text'){
+    const prefill = field.prefillFrom && profile ? (profile[field.prefillFrom] || '') : '';
+    inner = `<label>${escapeHtml(field.label)}${field.required ? ' *' : ''}</label><input type="text" id="${name}" value="${escapeHtml(prefill)}">`;
+  } else if(field.type === 'textarea'){
+    inner = `<label>${escapeHtml(field.label)}${field.required ? ' *' : ''}</label><textarea id="${name}"></textarea>`;
+  } else if(field.type === 'yesno'){
+    inner = `<label>${escapeHtml(field.label)}${field.required ? ' *' : ''}</label>
+      <div class="radio-row">
+        <label class="radio-opt"><input type="radio" name="${name}" value="yes"> Yes</label>
+        <label class="radio-opt"><input type="radio" name="${name}" value="no"> No</label>
+      </div>`;
+  } else if(field.type === 'radio'){
+    inner = `<label>${escapeHtml(field.label)}${field.required ? ' *' : ''}</label>
+      <div class="radio-row">${field.options.map(o=>`<label class="radio-opt"><input type="radio" name="${name}" value="${escapeHtml(o.value)}"> ${escapeHtml(o.label)}</label>`).join('')}</div>`;
+  } else if(field.type === 'ack'){
+    inner = `<label class="radio-opt" style="margin-top:10px;"><input type="checkbox" id="${name}"> ${escapeHtml(field.label)}</label>`;
+  }
+  return `<div class="sf-field" data-field="${name}"${wrapAttrs}>${inner}</div>`;
+}
+
+function renderSafetyForm(formType, profile){
+  const schema = SAFETY_FORMS[formType];
+  const sectionsHtml = schema.sections.map(section => `
+    <div class="section-title" style="margin:20px 4px 6px;">${escapeHtml(section.title)}</div>
+    ${section.fields.map(f=>renderSafetyField(f, profile)).join('')}
+    ${section.blockNote ? `<div class="helptext" style="margin:6px 4px 0;">${escapeHtml(section.blockNote)}</div>` : ''}
+  `).join('');
+  return `
+    <h2>${escapeHtml(schema.label)}</h2>
+    ${sectionsHtml}
+    <div class="divider"></div>
+    <div class="helptext" style="font-style:italic;">${escapeHtml(schema.acknowledgment)}</div>
+    ${signatureBlockHtml('sfSig', 'Your Signature')}
+    <div id="sfBlockWarning" class="warning-box" style="display:none;"></div>
+    <div id="sfFormError" class="warning-box" style="display:none; margin-top:16px;"></div>
+    <button class="btn" id="sfSubmitBtn" style="width:100%; margin-top:12px;">${escapeHtml(schema.submitLabel)}</button>
+  `;
+}
+
+/* Shows/hides every conditional (showIf) field against the form's current
+   answers — called once after render and again on every change so a
+   dependent field (e.g. 1A, only relevant if Q1 is "Yes") appears or
+   disappears live rather than needing a second pass. */
+function updateSafetyFormConditionals(){
+  document.querySelectorAll('.sf-field[data-show-if-field]').forEach(el=>{
+    const controllingField = el.dataset.showIfField;
+    const checked = document.querySelector(`input[name="${controllingField}"]:checked`);
+    const show = checked && checked.value === el.dataset.showIfEquals;
+    el.style.display = show ? 'block' : 'none';
+  });
+}
+
+/* Walks the schema, reading each visible field's current value. Returns
+   { valid, site, answers, blockedLabels } — answers is a flat
+   {fieldId: value} object (independent of showIf — a hidden/inapplicable
+   field is simply left out) ready to store as-is in the safety_forms
+   table's answers jsonb column. A 'site' field is pulled out separately
+   rather than folded into answers, matching site_visits/safety_documents
+   storing it as its own column (so the Admin tab's existing site filter/
+   CSV column work on this form too, same as everywhere else). blockedLabels
+   lists any "must be resolved before work starts" question answered "No"
+   (see SAFETY_FORMS' blockIfNo) — present but the caller decides whether
+   that blocks submission or just warns. */
+function collectSafetyForm(formType){
+  const schema = SAFETY_FORMS[formType];
+  const answers = {};
+  let site = null;
+  let firstMissingLabel = null;
+  const blockedLabels = [];
+  schema.sections.forEach(section=>{
+    section.fields.forEach(field=>{
+      const name = sfFieldName(field.id);
+      const el = document.querySelector(`[data-field="${name}"]`);
+      const visible = !el || el.style.display !== 'none';
+      if(!visible) return;
+      let value = null;
+      if(field.type === 'site'){
+        const checked = document.querySelector(`input[name="${name}"]:checked`);
+        value = checked ? checked.value : null;
+        if(field.required && !value){ if(!firstMissingLabel) firstMissingLabel = field.label; return; }
+        site = value;
+        return;
+      }
+      if(field.type === 'text' || field.type === 'textarea'){
+        value = document.getElementById(name).value.trim();
+      } else if(field.type === 'yesno' || field.type === 'radio'){
+        const checked = document.querySelector(`input[name="${name}"]:checked`);
+        value = checked ? checked.value : null;
+      } else if(field.type === 'ack'){
+        value = document.getElementById(name).checked ? true : null;
+      }
+      if(field.required && (value === null || value === '')){
+        if(!firstMissingLabel) firstMissingLabel = field.label;
+        return;
+      }
+      if(value !== null && value !== '') answers[field.id] = value;
+      if(field.blockIfNo && value === 'no') blockedLabels.push(field.label);
+    });
+  });
+  return { valid: !firstMissingLabel, firstMissingLabel, site, answers, blockedLabels };
+}
+
+function openSafetyForm(formType, profile){
+  const schema = SAFETY_FORMS[formType];
+  showModal(renderSafetyForm(formType, profile));
+  const canvas = wireSignatureBlock('sfSig');
+  updateSafetyFormConditionals();
+  document.querySelectorAll('.sf-field input[type="radio"]').forEach(r=>{
+    r.onchange = updateSafetyFormConditionals;
+  });
+
+  document.getElementById('sfSubmitBtn').onclick = async ()=>{
+    setFormError('sfFormError', null);
+    document.getElementById('sfBlockWarning').style.display = 'none';
+    const { valid, firstMissingLabel, site, answers, blockedLabels } = collectSafetyForm(formType);
+    if(!valid){ showToast(`Answer: ${firstMissingLabel}`); return; }
+    if(blockedLabels.length){
+      document.getElementById('sfBlockWarning').textContent =
+        `You can't submit with "No" to: ${blockedLabels.join('; ')}. Please speak with your site supervisor before continuing — they need to address this first.`;
+      document.getElementById('sfBlockWarning').style.display = 'block';
+      return;
+    }
+    const sig = readSignatureBlock('sfSig', canvas);
+    if(!sig.signed){ showToast('Sign in the box, or tap "Type instead."'); return; }
+
+    const btn = document.getElementById('sfSubmitBtn');
+    btn.disabled = true; btn.textContent = 'Submitting…';
+    try{
+      const { signatureType, signatureText, signatureFileUrl } = await uploadSignatureFields(sig);
+      await submitSafetyForm(profile, formType, site, answers, signatureType, signatureText, signatureFileUrl);
+      setLastSite(site);
+      closeModal();
+      showToast(`${schema.label} submitted.`);
+      refreshActivity();
+    }catch(e){
+      console.error(e);
+      const msg = e.message || "Couldn't submit — check your connection and try again.";
+      showToast(msg);
+      setFormError('sfFormError', `Not saved: ${msg}`);
+      setModalCloseGuard("This form hasn't been saved yet. Are you sure you want to close without finishing?");
+      btn.disabled = false; btn.textContent = schema.submitLabel;
     }
   };
 }

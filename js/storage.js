@@ -188,6 +188,29 @@ async function submitDocument(profile, type, fileUrl, notes, docTypeLabel, site,
   pushActivityLog({ ts: uploadedAt, label: `Submitted: ${docTypeLabel} (${siteLabel})` });
 }
 
+/* ---------- structured safety forms (Site Safety Orientation, and more to
+   come) — see SAFETY_FORMS in js/app.js. A plain INSERT, unlike the
+   sign_out_visit() RPC sign-out needs: the anon-key RLS gap that forced
+   that workaround only applies to UPDATE (it requires SELECT visibility
+   on an existing row to target it), not INSERT — a fresh row needs no
+   prior visibility, so a direct insert here is fine. */
+async function submitSafetyForm(profile, formType, site, answers, signatureType, signatureText, signatureFileUrl){
+  const submittedAt = new Date().toISOString();
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/safety_forms`, {
+    method: 'POST',
+    headers: { ...SUPABASE_HEADERS, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+    body: JSON.stringify({
+      id: uid(), subcontractor_id: profile.id,
+      subcontractor_name: profile.name, subcontractor_company: profile.company || null,
+      site, form_type: formType, answers,
+      signature_type: signatureType, signature_text: signatureText, signature_file_url: signatureFileUrl,
+      submitted_at: submittedAt
+    })
+  });
+  if(!res.ok) throw await apiError('Save submission', res);
+  pushActivityLog({ ts: submittedAt, label: `Submitted: ${SAFETY_FORMS[formType].label} (${SITE_LABELS[site] || site})` });
+}
+
 /* ---------- admin auth (Supabase Auth, email + password) ----------
    Real per-person accounts, invited by Josh via the Supabase dashboard
    (Authentication -> Users -> Invite user) — see README. This is what
@@ -317,4 +340,35 @@ async function adminFetch(path){
   if(res.status === 401){ clearAdminSession(); throw new Error('session expired'); }
   if(!res.ok) throw new Error(`request failed (${res.status})`);
   return res.json();
+}
+
+/* Authenticated write wrapper — same session handling as adminFetch above,
+   but for the (rare) writes the admin's own session needs to make, as
+   opposed to the public anon-key writes every other write in this file
+   uses. Throws if there's no valid session. */
+async function adminWrite(path, method, body){
+  const session = await ensureFreshAdminSession();
+  if(!session) throw new Error('not signed in');
+  const res = await fetch(`${SUPABASE_URL}${path}`, {
+    method,
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+    body: JSON.stringify(body)
+  });
+  if(res.status === 401){ clearAdminSession(); throw new Error('session expired'); }
+  if(!res.ok) throw await apiError('Save', res);
+}
+
+/* Records a Site Safety Representative's countersign on an already-
+   submitted safety form — an authenticated-only UPDATE (see the
+   "authenticated countersign safety_forms" RLS policy in supabase/),
+   deliberately requiring a real admin login rather than being open to the
+   public anon key like every other write in this app. */
+async function countersignSafetyForm(formId, repName, signatureType, signatureText, signatureFileUrl){
+  await adminWrite(`/rest/v1/safety_forms?id=eq.${encodeURIComponent(formId)}`, 'PATCH', {
+    countersigned_by: repName,
+    countersigned_at: new Date().toISOString(),
+    countersign_signature_type: signatureType,
+    countersign_signature_text: signatureText,
+    countersign_signature_file_url: signatureFileUrl
+  });
 }
