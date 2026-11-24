@@ -194,7 +194,11 @@ async function submitDocument(profile, type, fileUrl, notes, docTypeLabel, site,
    that workaround only applies to UPDATE (it requires SELECT visibility
    on an existing row to target it), not INSERT — a fresh row needs no
    prior visibility, so a direct insert here is fine. */
-async function submitSafetyForm(profile, formType, site, answers, signatureType, signatureText, signatureFileUrl){
+/* `signers` is an array of {name, signatureType, signatureText,
+   signatureFileUrl} — one entry per worker who signed at the bottom (see
+   SAFETY_FORMS' signOff in js/app.js). A single-signer form still sends a
+   one-entry array, so this is one shape regardless of signOff.mode. */
+async function submitSafetyForm(profile, formType, site, answers, signers){
   const submittedAt = new Date().toISOString();
   const res = await fetch(`${SUPABASE_URL}/rest/v1/safety_forms`, {
     method: 'POST',
@@ -202,13 +206,13 @@ async function submitSafetyForm(profile, formType, site, answers, signatureType,
     body: JSON.stringify({
       id: uid(), subcontractor_id: profile.id,
       subcontractor_name: profile.name, subcontractor_company: profile.company || null,
-      site, form_type: formType, answers,
-      signature_type: signatureType, signature_text: signatureText, signature_file_url: signatureFileUrl,
+      site, form_type: formType, answers, signers,
       submitted_at: submittedAt
     })
   });
   if(!res.ok) throw await apiError('Save submission', res);
-  pushActivityLog({ ts: submittedAt, label: `Submitted: ${SAFETY_FORMS[formType].label} (${SITE_LABELS[site] || site})` });
+  const names = signers.map(s=>s.name).join(', ');
+  pushActivityLog({ ts: submittedAt, label: `Submitted: ${SAFETY_FORMS[formType].label} (${SITE_LABELS[site] || site}) — ${names}` });
 }
 
 /* ---------- admin auth (Supabase Auth, email + password) ----------

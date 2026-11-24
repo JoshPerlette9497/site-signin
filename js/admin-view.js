@@ -154,6 +154,20 @@ function renderSafetyAnswersHtml(form){
   }).join('');
 }
 
+/* Each worker's own signature (drawn thumbnail or typed name) — shown
+   inside "View full form" rather than the main card, since there can be
+   several and the card itself just lists names (see mergeActivity above). */
+function renderSignersHtml(signers){
+  if(!signers || !signers.length) return '';
+  const rows = signers.map(s=>{
+    const sig = s.signatureType === 'typed'
+      ? `<em>${escapeHtml(s.signatureText || '')}</em>`
+      : (s.signatureFileUrl ? `<img src="${escapeHtml(s.signatureFileUrl)}" class="signature-thumb" alt="Signature">` : '');
+    return `<div style="padding:4px 0; border-bottom:1px solid var(--line); font-size:12px;"><strong>${escapeHtml(s.name)}</strong><br>${sig}</div>`;
+  }).join('');
+  return `<div style="margin-top:10px; font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; color:var(--ink-dim);">Signed By</div>${rows}`;
+}
+
 /* Countersigning requires a real admin login (see the "authenticated
    countersign safety_forms" RLS policy in supabase/) — deliberately not
    open to the public anon key the worker's own submission used, since
@@ -215,9 +229,8 @@ function mergeActivity(visits, docs, safetyForms){
     ...safetyForms.map(f=>({
       id: f.id, ts: f.submitted_at, name: f.subcontractor_name, company: f.subcontractor_company,
       label: `Submitted: ${(SAFETY_FORMS[f.form_type] && SAFETY_FORMS[f.form_type].label) || f.form_type}`,
-      site: f.site, safetyForm: f,
-      notes: f.countersigned_by ? `Countersigned by ${f.countersigned_by}` : 'Awaiting countersign — see Admin tab',
-      signatureType: f.signature_type, signatureText: f.signature_text, signatureUrl: f.signature_file_url
+      site: f.site, safetyForm: f, signers: f.signers || [],
+      notes: f.countersigned_by ? `Countersigned by ${f.countersigned_by}` : 'Awaiting countersign — see Admin tab'
     }))
   ].sort((a,b)=> new Date(b.ts) - new Date(a.ts));
 }
@@ -422,6 +435,7 @@ function renderAdminActivityList(items){
           ${it.hadOrientation != null ? `<div class="item-meta">Orientation: ${it.hadOrientation ? 'Yes' : 'No'} · Muster point: ${escapeHtml(MUSTER_LABELS[it.musterPoint] || it.musterPoint || '')} · Fit for work: ${it.fitForWork ? 'Yes' : 'No'}</div>` : ''}
           ${it.signatureType === 'typed' ? `<div class="item-meta">Signature: <em>${escapeHtml(it.signatureText || '')}</em></div>` : ''}
           ${it.signatureType === 'drawn' && it.signatureUrl ? `<div class="item-meta">Signature:</div><img src="${escapeHtml(it.signatureUrl)}" class="signature-thumb" alt="Signature">` : ''}
+          ${it.signers && it.signers.length ? `<div class="item-meta">Signed by: ${escapeHtml(it.signers.map(s=>s.name).join(', '))}</div>` : ''}
         </div>
         <div class="item-meta" style="text-align:right; white-space:nowrap;">${new Date(it.ts).toLocaleString('en-US',{month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})}</div>
       </div>
@@ -432,7 +446,10 @@ function renderAdminActivityList(items){
       ${it.safetyForm ? `
         <div class="divider no-print" style="margin:8px 0;"></div>
         <a href="#" class="no-print sf-view-toggle" data-id="${escapeHtml(it.id)}">View full form</a>
-        <div class="sf-answers" id="sfAnswers_${escapeHtml(it.id)}" style="display:none; margin-top:6px;">${renderSafetyAnswersHtml(it.safetyForm)}</div>
+        <div class="sf-answers" id="sfAnswers_${escapeHtml(it.id)}" style="display:none; margin-top:6px;">
+          ${renderSafetyAnswersHtml(it.safetyForm)}
+          ${renderSignersHtml(it.signers)}
+        </div>
         ${it.safetyForm.countersigned_by
           ? `<div class="item-meta" style="margin-top:8px;">Countersigned by ${escapeHtml(it.safetyForm.countersigned_by)} on ${new Date(it.safetyForm.countersigned_at).toLocaleDateString('en-US')}</div>`
           : `<button class="btn ghost no-print countersign-btn" data-form-id="${escapeHtml(it.safetyForm.id)}" style="width:100%; margin-top:10px;">Countersign as Site Safety Representative</button>`}
@@ -474,7 +491,9 @@ function toCSV(items){
     it.hadOrientation == null ? '' : (it.hadOrientation ? 'Yes' : 'No'),
     MUSTER_LABELS[it.musterPoint] || it.musterPoint || '',
     it.fitForWork == null ? '' : (it.fitForWork ? 'Yes' : 'No'),
-    it.signatureType === 'typed' ? it.signatureText : (it.signatureType === 'drawn' ? it.signatureUrl : ''),
+    it.signers && it.signers.length
+      ? it.signers.map(s=>s.name).join('; ')
+      : (it.signatureType === 'typed' ? it.signatureText : (it.signatureType === 'drawn' ? it.signatureUrl : '')),
     it.notes || '', it.url || ''
   ]);
   const escapeCell = v => `"${String(v).replace(/"/g, '""')}"`;

@@ -248,13 +248,27 @@ PDF Josh uploads — not new plumbing. Submissions land in a single
 fields that type defines), so a new form type needs no schema migration
 either.
 
+**Group orientation, one shared set of answers.** Site Safety Orientation
+is usually walked through with a whole crew at once, not one worker at a
+time — so the safety questions/acknowledgments above are answered **once**
+per session, and the sign-off at the bottom is a repeatable list: tap
+"+ Add Another Worker" for as many people as were actually present, each
+entering their own name and signing. At least one is required; an
+untouched blank row (nobody typed a name or signed it) is silently
+ignored rather than blocking submission, but a row with only a name or
+only a signature is treated as unfinished and blocks with a clear message
+naming who. This is schema-level (`signOff: { mode: 'multiple' }` in
+`SAFETY_FORMS`) rather than hardcoded to this one form, in case a future
+form type also needs several people to sign one shared submission — a
+form that only ever needs exactly one signer (`mode: 'single'`) still
+works the original way, one name + one signature, no add/remove.
+
 **Two judgment calls worth knowing about, both easy to change:**
-- The paper Site Safety Orientation form has the worker sign **and** a Site
-  Safety Representative sign, normally together in person. In the app, the
-  worker fills out and signs the whole thing alone on their own phone; a
-  rep countersigns it **separately**, afterward, from the Admin tab (see
-  below) — not in the same session, since the two don't always go through
-  it together. This needs a real admin login to do (see "Countersigning"
+- The paper Site Safety Orientation form also has a Site Safety
+  Representative sign, normally in person alongside the crew. In the app,
+  the rep countersigns **separately**, afterward, from the Admin tab (see
+  below) — not in the same session, since the two don't always happen
+  together. This needs a real admin login to do (see "Countersigning"
   below), unlike every other write in this app, which is open to the
   public anon key.
 - The form has a few questions explicitly marked on the paper version as
@@ -304,6 +318,13 @@ create policy "authenticated select safety_forms" on public.safety_forms
   for select to authenticated using (true);
 create policy "authenticated countersign safety_forms" on public.safety_forms
   for update to authenticated using (true) with check (true);
+```
+Also already applied — the column the group sign-off (above) actually
+writes to. The original `signature_type`/`signature_text`/`signature_file_url`
+columns stay in the table for any future `mode: 'single'` form type, but
+Site Safety Orientation no longer populates them:
+```sql
+alter table public.safety_forms add column if not exists signers jsonb;
 ```
 
 ## Admin accounts (Admin tab) — real per-person logins

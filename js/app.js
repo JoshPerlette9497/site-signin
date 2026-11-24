@@ -477,6 +477,12 @@ const SAFETY_FORMS = {
   site_orientation: {
     label: 'Site Safety Orientation',
     submitLabel: 'Complete Orientation',
+    /* 'multiple': one shared walkthrough — the safety questions above are
+       answered once for the group, then any number of workers present
+       each add their name and sign at the bottom to confirm attendance.
+       'single' (the only other mode, for a future form type that doesn't
+       need this) is one name + one signature, no add/remove. */
+    signOff: { mode: 'multiple', label: 'Worker Sign-Off', addLabel: '+ Add Another Worker' },
     sections: [
       { title: 'Worker Information', fields: [
         { id: 'site', type: 'site', label: 'Project / Site', required: true },
@@ -577,16 +583,73 @@ function renderSafetyForm(formType, profile){
     ${section.fields.map(f=>renderSafetyField(f, profile)).join('')}
     ${section.blockNote ? `<div class="helptext" style="margin:6px 4px 0;">${escapeHtml(section.blockNote)}</div>` : ''}
   `).join('');
+  const signOff = schema.signOff || { mode: 'single', label: 'Your Signature' };
+  const signOffHtml = signOff.mode === 'multiple'
+    ? `<div class="section-title" style="margin:20px 4px 6px;">${escapeHtml(signOff.label)}</div>
+       <div id="sfSignersList"></div>
+       <button type="button" class="btn ghost small" id="sfAddSignerBtn" style="margin-top:4px;">${escapeHtml(signOff.addLabel)}</button>`
+    : signatureBlockHtml('sfSig', signOff.label);
   return `
     <h2>${escapeHtml(schema.label)}</h2>
     ${sectionsHtml}
     <div class="divider"></div>
     <div class="helptext" style="font-style:italic;">${escapeHtml(schema.acknowledgment)}</div>
-    ${signatureBlockHtml('sfSig', 'Your Signature')}
+    ${signOffHtml}
     <div id="sfBlockWarning" class="warning-box" style="display:none;"></div>
     <div id="sfFormError" class="warning-box" style="display:none; margin-top:16px;"></div>
     <button class="btn" id="sfSubmitBtn" style="width:100%; margin-top:12px;">${escapeHtml(schema.submitLabel)}</button>
   `;
+}
+
+/* ---------- multi-signer sign-off (signOff.mode === 'multiple') ----------
+   Each row gets its own independent signature pad (reusing the same
+   signatureBlockHtml/wireSignatureBlock helpers the single-signer case and
+   the Daily Sign-In form use) — ids come from a counter that only ever
+   goes up, never reused, so removing a row and adding another can't
+   collide with a row still on screen. */
+let sfSignerCounter = 0;
+let sfSignerRows = []; // [{ id, canvas }], in DOM order isn't guaranteed after removals — fine, order doesn't matter for collection
+function addSignerRow(prefillName){
+  const id = `sfSigner${sfSignerCounter++}`;
+  const row = document.createElement('div');
+  row.className = 'card';
+  row.style.marginTop = '10px';
+  row.dataset.signerRow = id;
+  row.innerHTML = `
+    <label>Worker Name</label>
+    <input type="text" id="${id}Name" value="${escapeHtml(prefillName || '')}">
+    ${signatureBlockHtml(id, 'Signature')}
+    <a href="#" class="sf-remove-signer" style="font-size:12px; display:inline-block; margin-top:8px;">Remove</a>
+  `;
+  document.getElementById('sfSignersList').appendChild(row);
+  const canvas = wireSignatureBlock(id);
+  sfSignerRows.push({ id, canvas });
+  row.querySelector('.sf-remove-signer').onclick = (e)=>{
+    e.preventDefault();
+    row.remove();
+    sfSignerRows = sfSignerRows.filter(r=>r.id !== id);
+  };
+}
+
+/* Reads back every signer row still on screen. Rows nobody touched (blank
+   name, unsigned) are silently skipped — e.g. someone tapped "+ Add
+   Another Worker" and changed their mind. A row with only one of
+   name/signature filled in is reported in `incomplete` rather than
+   silently dropped, since that's very likely someone who got
+   interrupted partway through, not someone who meant to skip it. */
+function collectSigners(){
+  const complete = [];
+  const incomplete = [];
+  sfSignerRows.forEach(({ id, canvas })=>{
+    const nameEl = document.getElementById(`${id}Name`);
+    if(!nameEl) return;
+    const name = nameEl.value.trim();
+    const sig = readSignatureBlock(id, canvas);
+    if(!name && !sig.signed) return;
+    if(!name || !sig.signed){ incomplete.push(name || '(unnamed)'); return; }
+    complete.push({ name, sig });
+  });
+  return { complete, incomplete };
 }
 
 /* Shows/hides every conditional (showIf) field against the form's current
@@ -654,8 +717,18 @@ function collectSafetyForm(formType){
 
 function openSafetyForm(formType, profile){
   const schema = SAFETY_FORMS[formType];
+  const signOff = schema.signOff || { mode: 'single', label: 'Your Signature' };
   showModal(renderSafetyForm(formType, profile));
-  const canvas = wireSignatureBlock('sfSig');
+
+  let singleCanvas = null;
+  if(signOff.mode === 'multiple'){
+    sfSignerCounter = 0; sfSignerRows = [];
+    addSignerRow(profile && profile.name);
+    document.getElementById('sfAddSignerBtn').onclick = ()=>addSignerRow();
+  } else {
+    singleCanvas = wireSignatureBlock('sfSig');
+  }
+
   updateSafetyFormConditionals();
   document.querySelectorAll('.sf-field input[type="radio"]').forEach(r=>{
     r.onchange = updateSafetyFormConditionals;
@@ -672,14 +745,28 @@ function openSafetyForm(formType, profile){
       document.getElementById('sfBlockWarning').style.display = 'block';
       return;
     }
-    const sig = readSignatureBlock('sfSig', canvas);
-    if(!sig.signed){ showToast('Sign in the box, or tap "Type instead."'); return; }
+
+    let signerEntries; // [{ name, sig }]
+    if(signOff.mode === 'multiple'){
+      const { complete, incomplete } = collectSigners();
+      if(incomplete.length){ showToast(`${incomplete[0]} needs both a name and a signature before you can submit.`); return; }
+      if(!complete.length){ showToast('At least one worker needs to sign at the bottom.'); return; }
+      signerEntries = complete;
+    } else {
+      const sig = readSignatureBlock('sfSig', singleCanvas);
+      if(!sig.signed){ showToast('Sign in the box, or tap "Type instead."'); return; }
+      signerEntries = [{ name: (profile && profile.name) || '', sig }];
+    }
 
     const btn = document.getElementById('sfSubmitBtn');
     btn.disabled = true; btn.textContent = 'Submitting…';
     try{
-      const { signatureType, signatureText, signatureFileUrl } = await uploadSignatureFields(sig);
-      await submitSafetyForm(profile, formType, site, answers, signatureType, signatureText, signatureFileUrl);
+      const signers = [];
+      for(const entry of signerEntries){
+        const { signatureType, signatureText, signatureFileUrl } = await uploadSignatureFields(entry.sig);
+        signers.push({ name: entry.name, signatureType, signatureText, signatureFileUrl });
+      }
+      await submitSafetyForm(profile, formType, site, answers, signers);
       setLastSite(site);
       closeModal();
       showToast(`${schema.label} submitted.`);
