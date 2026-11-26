@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Supervisor Dashboard</title>
+<!--
+  New, standalone supervisor dashboard for the multi-site system
+  (SPEC.md, Thursday). Doesn't touch index.html/admin.html/s.html or any
+  of their code. Reads/writes the new tables (sites, forms, submissions,
+  site_visits_v2, form_versions, site_members, profiles) directly with
+  the logged-in supervisor's own session — every one of those actions is
+  already governed by the RLS policies from Day 1/Day 2 (company admin
+  manages X / site_admin manages own sites X / supervisor signs out on
+  own sites), so no Edge Function is needed here except inviting a new
+  supervisor (creating a real Auth user needs service-role, see
+  invite-supervisor).
+-->
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<style>
+  :root{
+    --brand:#73BDBE; --brand-dark:#1F5C60; --paper:#FFFFFF; --surface:#F4F8F8;
+    --line:#D8E4E4; --ink:#1B2B2C; --ink-dim:#5C7778;
+    --stamp-red:#C1440E; --stamp-green:#2E8B57; --stamp-amber:#C98A1E;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;min-height:100%;background:var(--paper);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:var(--ink);}
+  header.top{position:sticky; top:0; z-index:10; background:var(--brand-dark); border-bottom:3px solid var(--brand);
+    padding:calc(14px + env(safe-area-inset-top)) 16px 12px;}
+  header.top h1{margin:0; font-size:17px; font-weight:800; color:#fff;}
+  header.top .sub{color:rgba(255,255,255,0.75); font-size:12px; margin-top:2px;}
+  main{padding:14px 14px 80px; max-width:640px; margin:0 auto;}
+  label{font-size:11px; text-transform:uppercase; letter-spacing:0.5px; color:var(--ink-dim); display:block; margin-top:12px;}
+  input[type=text],input[type=email],input[type=password],input[type=number],select,textarea{
+    width:100%; padding:10px 12px; margin-top:6px; border:1px solid var(--line); border-radius:8px; font-size:14px; background:#fff;}
+  textarea{min-height:60px;}
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:8px;}
+  .section-title{text-transform:uppercase; letter-spacing:1px; font-size:12px; color:var(--ink-dim); margin:18px 4px 8px; font-weight:700;}
+  .btn{padding:11px 16px; border:none; border-radius:8px; background:var(--brand-dark); color:#fff; font-weight:700; font-size:14px; cursor:pointer;}
+  .btn.ghost{background:transparent; border:1px solid var(--brand-dark); color:var(--brand-dark);}
+  .btn.small{padding:6px 10px; font-size:12px;}
+  .btn.danger{background:var(--stamp-red);}
+  .row{display:flex; justify-content:space-between; align-items:center; gap:8px;}
+  .item-meta{color:var(--ink-dim); font-size:12px;}
+  .tabs{display:flex; gap:6px; margin-top:10px;}
+  .tabs button{flex:1; padding:8px; border:1px solid var(--line); background:#fff; border-radius:8px; font-size:13px; font-weight:600;}
+  .tabs button.active{background:var(--brand-dark); color:#fff; border-color:var(--brand-dark);}
+  .modal-bg{position:fixed; inset:0; background:rgba(20,40,40,0.45); z-index:50; display:flex; align-items:flex-end; justify-content:center;}
+  .modal{background:#fff; width:100%; max-width:560px; border-radius:16px 16px 0 0; padding:18px 16px calc(20px + env(safe-area-inset-bottom)); max-height:88vh; overflow-y:auto; border-top:3px solid var(--brand); position:relative;}
+  .modal .close{position:absolute; top:14px; right:16px; color:var(--ink-dim); font-size:22px; background:none; border:none;}
+  .field-editor-row{border:1px solid var(--line); border-radius:8px; padding:10px; margin-top:8px; background:#fff;}
+  .badge{display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700;}
+  .badge.passed{background:#E4F3EA; color:var(--stamp-green);}
+  .badge.blocked{background:#FBEEE8; color:var(--stamp-red);}
+  .helptext{color:var(--ink-dim); font-size:13px;}
+  .empty{color:var(--ink-dim); font-size:13px; padding:16px 4px; text-align:center;}
+  a{color:var(--brand-dark);}
+  .signature-thumb,.attachment-thumb{max-width:160px; max-height:90px; border:1px solid var(--line); border-radius:6px; margin-top:6px; display:block;}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Supervisor Dashboard</h1>
+  <div class="sub" id="headerSub"></div>
+</header>
+<main id="app"><div class="empty">Loading…</div></main>
+<script>
+const SUPABASE_URL = 'https://iafzmkwahiusfdxodgdi.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlhZnpta3dhaGl1c2ZkeG9kZ2RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY4MTE2ODIsImV4cCI6MjEwMjM4NzY4Mn0.-9plVpsptVaOZfVrhrLOovhYuZEghGUSLFx5yr7i-HU';
+const app = document.getElementById('app');
+function escapeHtml(s){ return (s||'').toString().replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function setHeaderSub(s){ document.getElementById('headerSub').textContent = s || ''; }
+function showModal(html){
+  closeModal();
+  const bg = document.createElement('div'); bg.className='modal-bg'; bg.id='modalBg';
+  bg.innerHTML = `<div class="modal" style="position:relative;"><button class="close" id="modalClose">×</button>${html}</div>`;
+  document.body.appendChild(bg);
+  document.getElementById('modalClose').onclick = closeModal;
+  bg.onclick = (e)=>{ if(e.target===bg) closeModal(); };
+}
+function closeModal(){ const bg=document.getElementById('modalBg'); if(bg) bg.remove(); }
+function showToast(msg){
+  const t = document.createElement('div');
+  t.style.cssText = 'position:fixed; bottom:24px; left:16px; right:16px; z-index:100; background:var(--brand-dark); color:#fff; padding:12px 16px; border-radius:10px; font-size:13px; font-weight:600; text-align:center;';
+  t.textContent = msg; document.body.appendChild(t);
+  setTimeout(()=>t.remove(), 4000);
+}
+
+/* ---------- session ---------- */
+const SESSION_KEY = 'dashSession';
+function getSession(){ try{ return JSON.parse(localStorage.getItem(SESSION_KEY)||'null'); }catch(e){ return null; } }
+function saveSession(s){ localStorage.setItem(SESSION_KEY, JSON.stringify(s)); }
+function clearSession(){ localStorage.removeItem(SESSION_KEY); }
+
+async function restDb(path, opts = {}){
+  const session = getSession();
+  const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
+    ...opts,
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${session.access_token}`,
+      'Content-Type': 'application/json',
+      Prefer: opts.prefer || 'return=representation',
+      ...(opts.headers||{})
+    }
+  });
+  if(!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+async function callFunction(name, body){
+  const session = getSession();
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/${name}`, {
+    method: 'POST', headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+  return data;
+}
+
+/* ---------- login ---------- */
+function renderLogin(){
+  app.innerHTML = `
+    <div class="card"><div class="helptext">Sign in with your supervisor account.</div></div>
+    <form id="loginForm">
+      <label>Email</label><input type="email" name="username" autocomplete="username" required id="loginEmail">
+      <label>Password</label><input type="password" name="password" autocomplete="current-password" required id="loginPassword">
+      <button class="btn" type="submit" id="loginBtn" style="width:100%; margin-top:16px;">Sign In</button>
+    </form>
+  `;
+  document.getElementById('loginForm').onsubmit = async (e)=>{
+    e.preventDefault();
+    const email = document.getElementById('loginEmail').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    const btn = document.getElementById('loginBtn');
+    btn.disabled = true; btn.textContent = 'Signing in…';
+    try{
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+        method: 'POST', headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error_description || data.msg || 'Invalid email or password');
+      saveSession({ access_token: data.access_token, refresh_token: data.refresh_token, expires_at: data.expires_at, email: data.user.email, user_id: data.user.id });
+      await boot();
+    }catch(e){
+      showToast(e.message); btn.disabled = false; btn.textContent = 'Sign In';
+    }
+  };
+}
+
+/* ---------- app state ---------- */
+let ME = null; // { id, email, is_company_admin, memberships: [{site_id, role, site_name, site_slug}] }
+let CURRENT_SITE = null;
+let CURRENT_TAB = 'dashboard';
+
+async function loadMe(){
+  const session = getSession();
+  const [profiles, memberships, allSites] = await Promise.all([
+    restDb(`/profiles?id=eq.${session.user_id}&select=*`),
+    restDb(`/site_members?user_id=eq.${session.user_id}&select=*,sites(id,name,slug)`),
+    ME_IS_ADMIN_HINT ? restDb(`/sites?select=id,name,slug&order=name`) : Promise.resolve(null)
+  ]);
+  const profile = profiles[0] || {};
+  let sites;
+  if(profile.is_company_admin){
+    sites = await restDb(`/sites?select=id,name,slug&order=name`);
+    sites = sites.map(s=>({ site_id: s.id, role: 'company_admin', site_name: s.name, site_slug: s.slug }));
+  } else {
+    sites = memberships.map(m=>({ site_id: m.sites.id, role: m.role, site_name: m.sites.name, site_slug: m.sites.slug }));
+  }
+  ME = { id: session.user_id, email: session.email, is_company_admin: !!profile.is_company_admin, memberships: sites };
+}
+let ME_IS_ADMIN_HINT = false; // avoids an extra round trip; real check happens via profile fetch above
+
+async function boot(){
+  const session = getSession();
+  if(!session){ renderLogin(); return; }
+  app.innerHTML = `<div class="empty">Loading…</div>`;
+  try{
+    await loadMe();
+  }catch(e){
+    clearSession(); renderLogin(); return;
+  }
+  if(!ME.memberships.length){
+    app.innerHTML = `<div class="empty">Your account isn't assigned to any site yet. Ask a company admin to assign you one.</div>`;
+    return;
+  }
+  CURRENT_SITE = ME.memberships[0];
+  renderShell();
+}
+
+function renderShell(){
+  setHeaderSub(`${ME.email}${ME.is_company_admin ? ' · company admin' : ''}`);
+  const siteOptions = ME.memberships.map(m=>`<option value="${m.site_id}">${escapeHtml(m.site_name)}</option>`).join('');
+  app.innerHTML = `
+    <div class="card row">
+      <div>
+        <label style="margin:0;">Site</label>
+        <select id="siteSwitcher">${siteOptions}</select>
+      </div>
+      <a href="#" id="logoutLink">Sign out</a>
+    </div>
+    <div class="tabs">
+      <button data-tab="dashboard" class="active">Dashboard</button>
+      <button data-tab="forms">Forms</button>
+      ${ME.is_company_admin ? `<button data-tab="admin">Admin</button>` : ''}
+    </div>
+    <div id="tabContent"></div>
+  `;
+  document.getElementById('siteSwitcher').onchange = (e)=>{
+    CURRENT_SITE = ME.memberships.find(m=>m.site_id === e.target.value);
+    renderTab();
+  };
+  document.getElementById('logoutLink').onclick = (e)=>{ e.preventDefault(); clearSession(); renderLogin(); };
+  document.querySelectorAll('.tabs button').forEach(btn=>{
+    btn.onclick = ()=>{
+      document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active'); CURRENT_TAB = btn.dataset.tab; renderTab();
+    };
+  });
+  renderTab();
+}
+
+function renderTab(){
+  if(CURRENT_TAB === 'dashboard') renderDashboardTab();
+  else if(CURRENT_TAB === 'forms') renderFormsTab();
+  else if(CURRENT_TAB === 'admin') renderAdminTab();
+}
+
+/* ---------- Dashboard tab ---------- */
+function defaultFromDate(){ const d = new Date(); d.setDate(d.getDate()-7); return d.toISOString().slice(0,10); }
+function todayDate(){ return new Date().toISOString().slice(0,10); }
+
+async function renderDashboardTab(){
+  const el = document.getElementById('tabContent');
+  el.innerHTML = `
+    <div class="section-title">Filters</div>
+    <div class="card">
+      <label>From (YYYY-MM-DD)</label><input type="text" id="fromDate" value="${defaultFromDate()}">
+      <label>To (YYYY-MM-DD)</label><input type="text" id="toDate" value="${todayDate()}">
+      <label>Search name or company</label><input type="text" id="searchText">
+      <button class="btn ghost small" id="exportCsvBtn" style="margin-top:10px;">Export CSV</button>
+    </div>
+    <div class="section-title">On Site Now</div>
+    <div id="onSite" class="empty">Loading…</div>
+    <div class="section-title">Today's Submissions</div>
+    <div id="todaySubs" class="empty">Loading…</div>
+    <div class="section-title">Blocked Attempts</div>
+    <div id="blockedSubs" class="empty">Loading…</div>
+  `;
+  document.getElementById('fromDate').oninput = refreshDashboardLists;
+  document.getElementById('toDate').oninput = refreshDashboardLists;
+  document.getElementById('searchText').oninput = refreshDashboardLists;
+  document.getElementById('exportCsvBtn').onclick = exportDashboardCsv;
+  await refreshDashboardLists();
+}
+
+let DASH_SUBMISSIONS = [], DASH_VISITS = [];
+async function refreshDashboardLists(){
+  const siteId = CURRENT_SITE.site_id;
+  const from = document.getElementById('fromDate').value.trim();
+  const to = document.getElementById('toDate').value.trim();
+  const search = document.getElementById('searchText').value.trim().toLowerCase();
+
+  const [visits, subs] = await Promise.all([
+    restDb(`/site_visits_v2?site_id=eq.${siteId}&signed_out_at=is.null&order=signed_in_at.desc&select=*`),
+    restDb(`/submissions?site_id=eq.${siteId}&order=created_at.desc&limit=500&select=*,forms(name,slug)`)
+  ]);
+  DASH_VISITS = visits; DASH_SUBMISSIONS = subs;
+
+  const fromTs = from ? new Date(from+'T00:00:00').getTime() : -Infinity;
+  const toTs = to ? new Date(to+'T23:59:59').getTime() : Infinity;
+  const filtered = subs.filter(s=>{
+    const t = new Date(s.created_at).getTime();
+    if(t < fromTs || t > toTs) return false;
+    if(search){
+      const hay = `${s.submitter_name||''} ${s.submitter_company||''}`.toLowerCase();
+      if(!hay.includes(search)) return false;
+    }
+    return true;
+  });
+
+  const onSiteEl = document.getElementById('onSite');
+  onSiteEl.innerHTML = visits.length ? visits.map(v=>`
+    <div class="card row">
+      <div><div style="font-weight:700;">${escapeHtml(v.name||'Unknown')}</div><div class="item-meta">${escapeHtml(v.company||'')} · ${new Date(v.signed_in_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</div></div>
+      <button class="btn small sign-out-btn" data-id="${v.id}">Sign Out</button>
+    </div>`).join('') : `<div class="empty">Nobody currently signed in.</div>`;
+  onSiteEl.querySelectorAll('.sign-out-btn').forEach(btn=>{
+    btn.onclick = async ()=>{
+      btn.disabled = true;
+      try{
+        await restDb(`/site_visits_v2?id=eq.${btn.dataset.id}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ signed_out_at: new Date().toISOString(), sign_out_method: 'supervisor' }) });
+        refreshDashboardLists();
+      }catch(e){ showToast('Could not sign out.'); btn.disabled = false; }
+    };
+  });
+
+  const passed = filtered.filter(s=>s.status==='passed');
+  const blocked = filtered.filter(s=>s.status==='blocked');
+  const renderSubList = (list)=> list.length ? list.map(s=>`
+    <div class="card submission-row" data-id="${s.id}" style="cursor:pointer;">
+      <div class="row">
+        <div><div style="font-weight:700;">${escapeHtml(s.submitter_name||'Unknown')}</div><div class="item-meta">${escapeHtml(s.submitter_company||'')} · ${escapeHtml((s.forms&&s.forms.name)||'')}</div></div>
+        <div><span class="badge ${s.status}">${s.status}</span><div class="item-meta">${new Date(s.created_at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</div></div>
+      </div>
+      ${s.blocked_reason ? `<div class="item-meta" style="margin-top:4px;">${escapeHtml(s.blocked_reason)}</div>` : ''}
+    </div>`).join('') : `<div class="empty">Nothing here.</div>`;
+  document.getElementById('todaySubs').innerHTML = renderSubList(passed);
+  document.getElementById('blockedSubs').innerHTML = renderSubList(blocked);
+  document.querySelectorAll('.submission-row').forEach(row=>{
+    row.onclick = ()=>openSubmissionDetail(row.dataset.id);
+  });
+}
+
+function exportDashboardCsv(){
+  const header = ['Timestamp','Form','Status','Name','Company','Blocked Reason'];
+  const rows = DASH_SUBMISSIONS.map(s=>[new Date(s.created_at).toLocaleString('en-US'), (s.forms&&s.forms.name)||'', s.status, s.submitter_name||'', s.submitter_company||'', s.blocked_reason||'']);
+  const esc = v=>`"${String(v).replace(/"/g,'""')}"`;
+  const csv = [header, ...rows].map(r=>r.map(esc).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob); const a = document.createElement('a');
+  a.href = url; a.download = `${CURRENT_SITE.site_slug}-submissions.csv`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+
+/* ---------- Submission detail (with signed-file viewing + print/PDF) ---------- */
+async function fetchAuthedFileUrl(path){
+  const session = getSession();
+  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/authenticated/site-submissions/${path}`, {
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${session.access_token}` }
+  });
+  if(!res.ok) return null;
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
+async function openSubmissionDetail(id){
+  const sub = DASH_SUBMISSIONS.find(s=>s.id===id);
+  if(!sub) return;
+  // Resolve against the historical version snapshot, not the live (possibly
+  // since-edited) forms.definition — SPEC.md: old records must stay
+  // readable after a form is edited.
+  const versions = await restDb(`/form_versions?form_id=eq.${sub.form_id}&version=eq.${sub.form_version}&select=definition`);
+  const def = versions[0] ? versions[0].definition : null;
+  const fields = def ? def.fields : [];
+
+  let rowsHtml = '';
+  for(const field of fields){
+    const val = sub.answers[field.id];
+    if(val === undefined) continue;
+    if(field.type === 'signature' || field.type === 'photo'){
+      const looksLikePath = typeof val === 'string' && val.includes('/');
+      const content = looksLikePath
+        ? `<img class="attachment-thumb" data-path="${escapeHtml(val)}" alt="${escapeHtml(field.label)}">`
+        : `<em>${escapeHtml(val)}</em>`;
+      rowsHtml += `<div style="padding:6px 0; border-bottom:1px solid var(--line);"><strong>${escapeHtml(field.label)}</strong><br>${content}</div>`;
+    } else {
+      const display = Array.isArray(val) ? val.join(', ') : String(val);
+      rowsHtml += `<div style="padding:6px 0; border-bottom:1px solid var(--line); font-size:13px;"><strong>${escapeHtml(field.label)}</strong><br>${escapeHtml(display)}</div>`;
+    }
+  }
+  showModal(`
+    <h2 style="margin:0 0 4px;">${escapeHtml(sub.submitter_name||'Unknown')}</h2>
+    <div class="item-meta">${escapeHtml(sub.submitter_company||'')} · form v${sub.form_version} · ${new Date(sub.created_at).toLocaleString('en-US')}</div>
+    <span class="badge ${sub.status}" style="margin-top:8px;">${sub.status}</span>
+    ${sub.blocked_reason ? `<div class="helptext" style="margin-top:6px;">${escapeHtml(sub.blocked_reason)}</div>` : ''}
+    <div style="margin-top:12px;">${rowsHtml || '<div class="empty">No answers recorded.</div>'}</div>
+    <button class="btn ghost small" style="width:100%; margin-top:14px;" onclick="window.print()">Print / Save as PDF</button>
+  `);
+  document.querySelectorAll('#modalBg img.attachment-thumb[data-path]').forEach(async img=>{
+    const url = await fetchAuthedFileUrl(img.dataset.path);
+    if(url) img.src = url;
+  });
+}
+
+/* ---------- Forms tab: structured editor + publish + QR ---------- */
+async function renderFormsTab(){
+  const el = document.getElementById('tabContent');
+  const forms = await restDb(`/forms?site_id=eq.${CURRENT_SITE.site_id}&order=name&select=*`);
+  const canEdit = CURRENT_SITE.role === 'site_admin' || CURRENT_SITE.role === 'company_admin';
+  el.innerHTML = `
+    <div class="section-title">Forms — ${escapeHtml(CURRENT_SITE.site_name)}</div>
+    ${forms.map(f=>`
+      <div class="card">
+        <div class="row">
+          <div><div style="font-weight:700;">${escapeHtml(f.name)}</div><div class="item-meta">/${escapeHtml(f.slug)} · v${f.version} · ${f.active ? 'active' : 'inactive'}</div></div>
+          ${canEdit ? `<button class="btn small edit-form-btn" data-id="${f.id}">Edit</button>` : ''}
+        </div>
+      </div>
+    `).join('') || '<div class="empty">No forms for this site yet.</div>'}
+  `;
+  el.querySelectorAll('.edit-form-btn').forEach(btn=>{
+    btn.onclick = ()=>openFormEditor(forms.find(f=>f.id===btn.dataset.id));
+  });
+}
+
+const FIELD_TYPES = ['text','phone','number','date','yes_no','single_choice','checklist','long_text','signature','photo','info'];
+function fieldEditorRowHtml(field, idx){
+  return `
+    <div class="field-editor-row" data-idx="${idx}">
+      <div class="row"><strong>Field ${idx+1}</strong><a href="#" class="remove-field" data-idx="${idx}">Remove</a></div>
+      <label>Field ID</label><input type="text" class="f-id" value="${escapeHtml(field.id||'')}">
+      <label>Label</label><input type="text" class="f-label" value="${escapeHtml(field.label||'')}">
+      <label>Type</label><select class="f-type">${FIELD_TYPES.map(t=>`<option value="${t}" ${field.type===t?'selected':''}>${t}</option>`).join('')}</select>
+      <label><input type="checkbox" class="f-required" ${field.required?'checked':''} style="width:auto;"> Required</label>
+      <label>Options (comma-separated, for single_choice/checklist)</label><input type="text" class="f-options" value="${escapeHtml((field.options||[]).join(', '))}">
+      <label>Gate: must equal (yes_no/single_choice)</label><input type="text" class="f-gate-equal" value="${escapeHtml(field.gate && field.gate.must_equal !== undefined ? field.gate.must_equal : '')}">
+      <label><input type="checkbox" class="f-gate-all" ${field.gate && field.gate.must_include_all ? 'checked' : ''} style="width:auto;"> Gate: must include all (checklist)</label>
+      <label>Gate message (leave blank for no gate)</label><input type="text" class="f-gate-msg" value="${escapeHtml(field.gate ? field.gate.message : '')}">
+      <label>Gate redirect form slug (optional)</label><input type="text" class="f-gate-redirect" value="${escapeHtml(field.gate && field.gate.redirect_form || '')}">
+    </div>
+  `;
+}
+function readFieldEditorRow(row){
+  const id = row.querySelector('.f-id').value.trim();
+  const label = row.querySelector('.f-label').value.trim();
+  const type = row.querySelector('.f-type').value;
+  const required = row.querySelector('.f-required').checked;
+  const optionsRaw = row.querySelector('.f-options').value.trim();
+  const options = optionsRaw ? optionsRaw.split(',').map(o=>o.trim()).filter(Boolean) : undefined;
+  const gateMsg = row.querySelector('.f-gate-msg').value.trim();
+  const gateEqual = row.querySelector('.f-gate-equal').value.trim();
+  const gateAll = row.querySelector('.f-gate-all').checked;
+  const gateRedirect = row.querySelector('.f-gate-redirect').value.trim();
+  const field = { id, label, type, required };
+  if(options) field.options = options;
+  if(gateMsg){
+    field.gate = { message: gateMsg };
+    if(gateEqual) field.gate.must_equal = gateEqual;
+    if(gateAll) field.gate.must_include_all = true;
+    if(gateRedirect) field.gate.redirect_form = gateRedirect;
+  }
+  return field;
+}
+
+function openFormEditor(form){
+  const fields = JSON.parse(JSON.stringify(form.definition.fields || []));
+  showModal(`
+    <h2>${escapeHtml(form.name)}</h2>
+    <div class="helptext">Current version: ${form.version}. Publishing saves a new version — old submissions still display against the version they were filled against.</div>
+    <div id="fieldsList">${fields.map(fieldEditorRowHtml).join('')}</div>
+    <button class="btn ghost small" id="addFieldBtn" style="margin-top:10px;">+ Add Field</button>
+    <div style="margin-top:16px;">
+      <label><input type="checkbox" id="formActive" ${form.active?'checked':''} style="width:auto;"> Active</label>
+    </div>
+    <button class="btn" id="publishBtn" style="width:100%; margin-top:14px;">Save &amp; Publish New Version</button>
+    <div class="section-title">QR Code</div>
+    <div style="text-align:center;"><canvas id="qrCanvas"></canvas></div>
+    <div class="helptext" style="text-align:center; word-break:break-all;">${location.origin}${location.pathname.replace('dashboard.html','s.html')}?site=${encodeURIComponent(CURRENT_SITE.site_slug)}&form=${encodeURIComponent(form.slug)}</div>
+  `);
+  renderQr(form.slug);
+  document.getElementById('addFieldBtn').onclick = ()=>{
+    const list = document.getElementById('fieldsList');
+    const idx = list.children.length;
+    list.insertAdjacentHTML('beforeend', fieldEditorRowHtml({}, idx));
+    wireRemoveButtons();
+  };
+  wireRemoveButtons();
+  function wireRemoveButtons(){
+    document.querySelectorAll('.remove-field').forEach(a=>{
+      a.onclick = (e)=>{ e.preventDefault(); e.target.closest('.field-editor-row').remove(); };
+    });
+  }
+  document.getElementById('publishBtn').onclick = async ()=>{
+    const rows = document.querySelectorAll('#fieldsList .field-editor-row');
+    const newFields = Array.from(rows).map(readFieldEditorRow).filter(f=>f.id);
+    const newDefinition = { ...form.definition, fields: newFields };
+    const newVersion = form.version + 1;
+    const active = document.getElementById('formActive').checked;
+    const btn = document.getElementById('publishBtn');
+    btn.disabled = true; btn.textContent = 'Publishing…';
+    try{
+      await restDb('/form_versions', { method: 'POST', prefer: 'return=minimal', body: JSON.stringify({ form_id: form.id, version: newVersion, definition: newDefinition }) });
+      await restDb(`/forms?id=eq.${form.id}`, { method: 'PATCH', prefer: 'return=minimal', body: JSON.stringify({ definition: newDefinition, version: newVersion, active }) });
+      showToast(`Published version ${newVersion}.`);
+      closeModal();
+      renderFormsTab();
+    }catch(e){
+      showToast('Could not publish — check your connection and try again.');
+      btn.disabled = false; btn.textContent = 'Save & Publish New Version';
+    }
+  };
+}
+function renderQr(formSlug){
+  const url = `${location.origin}${location.pathname.replace('dashboard.html','s.html')}?site=${encodeURIComponent(CURRENT_SITE.site_slug)}&form=${encodeURIComponent(formSlug)}`;
+  if(window.QRCode) QRCode.toCanvas(document.getElementById('qrCanvas'), url, { width: 200 });
+}
+
+/* ---------- Admin tab: sites, invite supervisors, templates ---------- */
+async function renderAdminTab(){
+  const el = document.getElementById('tabContent');
+  const [sites, templates] = await Promise.all([
+    restDb('/sites?select=*&order=name'),
+    restDb('/form_templates?select=id,name,version&order=name')
+  ]);
+  el.innerHTML = `
+    <div class="section-title">Sites</div>
+    ${sites.map(s=>`<div class="card"><div style="font-weight:700;">${escapeHtml(s.name)}</div><div class="item-meta">/${escapeHtml(s.slug)} · ${s.active?'active':'inactive'}</div></div>`).join('')}
+    <button class="btn ghost small" id="addSiteBtn">+ Add Site</button>
+
+    <div class="section-title">Invite Supervisor</div>
+    <div class="card">
+      <label>Email</label><input type="email" id="inviteEmail">
+      <label>Full Name</label><input type="text" id="inviteName">
+      <label>Site</label><select id="inviteSite">${sites.map(s=>`<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')}</select>
+      <label>Role</label><select id="inviteRole"><option value="site_admin">site_admin</option><option value="viewer">viewer</option></select>
+      <button class="btn" id="inviteBtn" style="width:100%; margin-top:12px;">Send Invite</button>
+    </div>
+
+    <div class="section-title">Company Templates</div>
+    ${templates.map(t=>`<div class="card"><div style="font-weight:700;">${escapeHtml(t.name)}</div><div class="item-meta">v${t.version}</div></div>`).join('')}
+  `;
+  document.getElementById('addSiteBtn').onclick = async ()=>{
+    const name = prompt('Site name:'); if(!name) return;
+    const slug = name.toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');
+    try{
+      await restDb('/sites', { method: 'POST', prefer: 'return=minimal', body: JSON.stringify({ name, slug, active: true }) });
+      showToast('Site created.'); renderAdminTab();
+    }catch(e){ showToast('Could not create site — slug may already exist.'); }
+  };
+  document.getElementById('inviteBtn').onclick = async ()=>{
+    const email = document.getElementById('inviteEmail').value.trim();
+    const full_name = document.getElementById('inviteName').value.trim();
+    const site_id = document.getElementById('inviteSite').value;
+    const role = document.getElementById('inviteRole').value;
+    if(!email){ showToast('Enter an email.'); return; }
+    const btn = document.getElementById('inviteBtn');
+    btn.disabled = true; btn.textContent = 'Sending…';
+    try{
+      await callFunction('invite-supervisor', { email, full_name, site_id, role });
+      showToast(`Invited ${email}.`);
+      document.getElementById('inviteEmail').value = ''; document.getElementById('inviteName').value = '';
+    }catch(e){ showToast(e.message || 'Could not invite.'); }
+    btn.disabled = false; btn.textContent = 'Send Invite';
+  };
+}
+
+boot();
+</script>
+</body>
+</html>
