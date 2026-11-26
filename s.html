@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Site Form</title>
+<!--
+  Public, no-login form runner for the multi-site system (SPEC.md).
+  Brand new, standalone page — doesn't touch index.html/admin.html or any
+  of their JS at all. Reached via ?site=<slug>&form=<slug> (query-string
+  routing rather than the spec's example /s/{site}/{form} path — simpler,
+  zero extra GitHub Pages config, easy to swap for a prettier path later
+  via a 404.html rewrite if wanted).
+
+  Talks only to the get-form / submit-form / sign-out Edge Functions —
+  never touches a table directly. The anon key below is the same public,
+  by-design key already used everywhere else in this app; it grants
+  nothing here since forms/submissions/site_visits_v2 have no anon
+  table policies at all — the Edge Functions are the only door in.
+-->
+<style>
+  :root{
+    --brand:#73BDBE; --brand-dark:#1F5C60; --paper:#FFFFFF; --surface:#F4F8F8;
+    --line:#D8E4E4; --ink:#1B2B2C; --ink-dim:#5C7778;
+    --stamp-red:#C1440E; --stamp-green:#2E8B57;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;min-height:100%;background:var(--paper);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:var(--ink);}
+  header.top{background:var(--brand-dark); border-bottom:3px solid var(--brand);
+    padding:calc(14px + env(safe-area-inset-top)) 16px 12px;}
+  header.top h1{margin:0; font-size:17px; font-weight:800; color:#fff;}
+  header.top .sub{color:rgba(255,255,255,0.75); font-size:12px; margin-top:2px;}
+  main{padding:16px 16px 40px; max-width:480px; margin:0 auto;}
+  label{font-size:12px; text-transform:uppercase; letter-spacing:0.4px; color:var(--ink-dim); display:block; margin-top:16px;}
+  input[type=text],input[type=tel],input[type=number],input[type=date],textarea{
+    width:100%; padding:11px 12px; margin-top:6px; border:1px solid var(--line); border-radius:8px; font-size:15px; background:#fff;}
+  textarea{min-height:70px;}
+  .radio-row{display:flex; gap:16px; margin-top:8px; flex-wrap:wrap;}
+  .radio-opt{display:flex; align-items:center; gap:6px; font-size:14px; font-weight:400;}
+  .radio-opt input{width:auto;}
+  .helptext{color:var(--ink-dim); font-size:13px; line-height:1.5;}
+  .info-box{background:var(--surface); border-radius:8px; padding:10px 12px; margin-top:10px; font-size:13px;}
+  .warning-box{margin-top:10px; padding:10px 12px; border-radius:8px; background:#FBEEE8; border:1px solid var(--stamp-red); color:var(--stamp-red); font-size:13px; font-weight:600; display:none;}
+  .btn{width:100%; margin-top:20px; padding:14px; border:none; border-radius:10px; background:var(--brand-dark); color:#fff; font-weight:700; font-size:15px;}
+  .btn:disabled{opacity:0.6;}
+  .sig-canvas{width:100%; height:140px; border:1px solid var(--line); border-radius:8px; background:#fff; margin-top:8px; touch-action:none; display:block;}
+  .sig-toggle{font-size:12px; margin-top:6px;}
+  .sig-toggle a{color:var(--brand-dark);}
+  .confirm{text-align:center; padding:40px 0;}
+  .confirm .check{font-size:48px; color:var(--stamp-green);}
+  .loading, .error-screen{padding:40px 16px; text-align:center; color:var(--ink-dim);}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1 id="headerTitle">Loading…</h1>
+  <div class="sub" id="headerSub"></div>
+</header>
+<main id="app"><div class="loading">Loading form…</div></main>
+<script>
+const SUPABASE_URL = 'https://iafzmkwahiusfdxodgdi.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlhZnpta3dhaGl1c2ZkeG9kZ2RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY4MTE2ODIsImV4cCI6MjEwMjM4NzY4Mn0.-9plVpsptVaOZfVrhrLOovhYuZEghGUSLFx5yr7i-HU';
+const app = document.getElementById('app');
+
+function escapeHtml(s){ return (s||'').toString().replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function setHeader(title, sub){ document.getElementById('headerTitle').textContent = title; document.getElementById('headerSub').textContent = sub || ''; }
+function qs(name){ return new URLSearchParams(window.location.search).get(name); }
+
+async function callFunction(name, opts){
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/${name}`, {
+    ...opts,
+    headers: { ...(opts.headers||{}), apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` }
+  });
+  const body = await res.json().catch(()=>({}));
+  if(!res.ok && !body.status) throw new Error(body.error || `request failed (${res.status})`);
+  return body;
+}
+
+/* ---------- signature pad (pointer events; draw or type) ---------- */
+function setupSignatureCanvas(canvas){
+  const ctx = canvas.getContext('2d');
+  const ratio = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * ratio; canvas.height = rect.height * ratio;
+  ctx.scale(ratio, ratio); ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#1B2B2C';
+  let drawing = false, hasStrokes = false, lastX = 0, lastY = 0;
+  const pos = (e)=>{ const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  canvas.addEventListener('pointerdown', (e)=>{ drawing = true; hasStrokes = true; const p = pos(e); lastX = p.x; lastY = p.y; canvas.setPointerCapture(e.pointerId); });
+  canvas.addEventListener('pointermove', (e)=>{ if(!drawing) return; const p = pos(e); ctx.beginPath(); ctx.moveTo(lastX, lastY); ctx.lineTo(p.x, p.y); ctx.stroke(); lastX = p.x; lastY = p.y; });
+  const stop = ()=>{ drawing = false; };
+  canvas.addEventListener('pointerup', stop); canvas.addEventListener('pointerleave', stop);
+  canvas.hasStrokes = ()=>hasStrokes;
+  canvas.clearSig = ()=>{ ctx.clearRect(0,0,canvas.width,canvas.height); hasStrokes = false; };
+  return canvas;
+}
+
+function fieldApplicable(field, answers){
+  if(!field.show_if) return true;
+  return answers[field.show_if.field] === field.show_if.equals;
+}
+function evaluateGate(field, value){
+  const g = field.gate; if(!g) return true;
+  if(g.must_equal !== undefined) return value === g.must_equal;
+  if(g.must_include_all) return Array.isArray(value) && field.options && field.options.every(o=>value.includes(o));
+  if(g.must_be_checked) return value === true;
+  return true;
+}
+
+function renderField(field){
+  const name = `f_${field.id}`;
+  let inner = '';
+  if(field.type === 'info'){
+    inner = `<div class="info-box">${escapeHtml(field.label)}</div>`;
+  } else if(field.type === 'text' || field.type === 'phone'){
+    inner = `<label>${escapeHtml(field.label)}${field.required?' *':''}</label><input type="${field.type==='phone'?'tel':'text'}" name="${name}">`;
+  } else if(field.type === 'number'){
+    inner = `<label>${escapeHtml(field.label)}${field.required?' *':''}</label><input type="number" inputmode="numeric" name="${name}">`;
+  } else if(field.type === 'date'){
+    inner = `<label>${escapeHtml(field.label)}${field.required?' *':''}</label><input type="date" name="${name}">`;
+  } else if(field.type === 'long_text'){
+    inner = `<label>${escapeHtml(field.label)}${field.required?' *':''}</label><textarea name="${name}"></textarea>`;
+  } else if(field.type === 'yes_no'){
+    inner = `<label>${escapeHtml(field.label)}${field.required?' *':''}</label><div class="radio-row">
+      <label class="radio-opt"><input type="radio" name="${name}" value="yes"> Yes</label>
+      <label class="radio-opt"><input type="radio" name="${name}" value="no"> No</label></div>
+      <div class="warning-box" id="warn_${name}"></div>`;
+  } else if(field.type === 'single_choice'){
+    inner = `<label>${escapeHtml(field.label)}${field.required?' *':''}</label><div class="radio-row">
+      ${field.options.map(o=>`<label class="radio-opt"><input type="radio" name="${name}" value="${escapeHtml(o)}"> ${escapeHtml(o)}</label>`).join('')}
+      </div><div class="warning-box" id="warn_${name}"></div>`;
+  } else if(field.type === 'checklist'){
+    inner = `<label>${escapeHtml(field.label)}${field.required?' *':''}</label>
+      ${field.options.map(o=>`<label class="radio-opt" style="display:block; margin-top:8px;"><input type="checkbox" name="${name}" value="${escapeHtml(o)}"> ${escapeHtml(o)}</label>`).join('')}
+      <div class="warning-box" id="warn_${name}"></div>`;
+  } else if(field.type === 'signature'){
+    inner = `<label>${escapeHtml(field.label)}${field.required?' *':''}</label>
+      <canvas class="sig-canvas" id="canvas_${name}"></canvas>
+      <div class="sig-toggle"><a href="#" data-clear="${name}">Clear</a> · <a href="#" data-type-toggle="${name}">Type instead</a></div>
+      <input type="text" name="${name}_typed" placeholder="Type your full name" style="display:none;">`;
+  } else if(field.type === 'photo'){
+    inner = `<label>${escapeHtml(field.label)}${field.required?' *':''}</label><input type="file" accept="image/*" capture="environment" name="${name}">`;
+  }
+  return `<div class="sf-field" data-field="${name}" data-show-if='${field.show_if ? JSON.stringify(field.show_if) : ''}'>${inner}</div>`;
+}
+
+function updateConditionals(fields){
+  const answers = readRawAnswers(fields, true);
+  document.querySelectorAll('.sf-field[data-show-if]').forEach(el=>{
+    const showIf = el.dataset.showIf; if(!showIf) return;
+    const cond = JSON.parse(showIf);
+    el.style.display = (answers[`f_${cond.field}`] === cond.equals) ? 'block' : 'none';
+  });
+}
+
+function readRawAnswers(fields, lenient){
+  const answers = {};
+  fields.forEach(field=>{
+    const name = `f_${field.id}`;
+    if(field.type === 'yes_no' || field.type === 'single_choice'){
+      const checked = app.querySelector(`input[name="${name}"]:checked`);
+      answers[name] = checked ? checked.value : null;
+    } else if(field.type === 'checklist'){
+      answers[name] = Array.from(app.querySelectorAll(`input[name="${name}"]:checked`)).map(i=>i.value);
+    } else if(field.type === 'signature'){
+      // handled separately at submit time (async canvas->dataURL)
+    } else if(field.type === 'photo'){
+      // handled separately at submit time (async file->dataURL)
+    } else if(field.type !== 'info'){
+      const el = app.querySelector(`[name="${name}"]`);
+      answers[name] = el ? el.value.trim() : '';
+    }
+  });
+  return answers;
+}
+
+function fileToDataUrl(file){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=>resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+let siteSlug, formSlug, formDef, canvases = {};
+
+async function loadForm(){
+  siteSlug = qs('site'); formSlug = qs('form');
+  if(!siteSlug || !formSlug){ app.innerHTML = `<div class="error-screen">Missing site or form in the link.</div>`; return; }
+  setHeader('Loading…');
+  try{
+    const res = await callFunction(`get-form?site=${encodeURIComponent(siteSlug)}&form=${encodeURIComponent(formSlug)}`, { method: 'GET' });
+    if(res.error){ app.innerHTML = `<div class="error-screen">This link isn't valid. Check with your supervisor for the correct QR code.</div>`; return; }
+    formDef = res.form;
+    renderForm(res.site.name);
+  }catch(e){
+    app.innerHTML = `<div class="error-screen">Couldn't load this form — check your connection and try again.</div>`;
+  }
+}
+
+function renderForm(siteName){
+  setHeader(formDef.title, siteName);
+  const fields = formDef.fields;
+  app.innerHTML = `
+    ${formDef.intro ? `<div class="helptext">${escapeHtml(formDef.intro)}</div>` : ''}
+    ${fields.map(renderField).join('')}
+    <div class="warning-box" id="formError"></div>
+    <button class="btn" id="submitBtn">Submit</button>
+  `;
+  canvases = {};
+  fields.forEach(field=>{
+    if(field.type === 'signature'){
+      const name = `f_${field.id}`;
+      const canvas = setupSignatureCanvas(document.getElementById(`canvas_${name}`));
+      canvases[name] = canvas;
+      app.querySelector(`[data-clear="${name}"]`).onclick = (e)=>{ e.preventDefault(); canvas.clearSig(); };
+      app.querySelector(`[data-type-toggle="${name}"]`).onclick = (e)=>{
+        e.preventDefault();
+        const typedInput = app.querySelector(`[name="${name}_typed"]`);
+        const showingTyped = typedInput.style.display !== 'none';
+        typedInput.style.display = showingTyped ? 'none' : 'block';
+        canvas.style.display = showingTyped ? 'block' : 'none';
+        e.target.textContent = showingTyped ? 'Type instead' : 'Draw instead';
+      };
+    }
+  });
+  app.querySelectorAll('input[type=radio], input[type=checkbox]').forEach(el=>{
+    el.onchange = ()=>{ updateConditionals(fields); document.getElementById(`warn_${el.name}`).style.display = 'none'; };
+  });
+  updateConditionals(fields);
+  document.getElementById('submitBtn').onclick = ()=>submitForm(fields);
+}
+
+async function submitForm(fields){
+  document.getElementById('formError').style.display = 'none';
+  document.querySelectorAll('.warning-box[id^="warn_"]').forEach(w=>w.style.display='none');
+
+  const raw = readRawAnswers(fields, false);
+  const answers = {};
+  for(const field of fields){
+    const name = `f_${field.id}`;
+    const el = document.querySelector(`[data-field="${name}"]`);
+    if(el && el.style.display === 'none') continue; // not applicable
+    if(field.type === 'info') continue;
+
+    if(field.type === 'signature'){
+      const typedInput = app.querySelector(`[name="${name}_typed"]`);
+      const typing = typedInput.style.display !== 'none';
+      if(typing){
+        if(!typedInput.value.trim()){ if(field.required){ showError(`Sign: ${field.label}`); return; } continue; }
+        answers[field.id] = typedInput.value.trim(); // typed signature stored as plain text, not a file
+      } else {
+        const canvas = canvases[name];
+        if(!canvas.hasStrokes()){ if(field.required){ showError(`Sign in the box: ${field.label}`); return; } continue; }
+        answers[field.id] = await new Promise(resolve=>canvas.toBlob(b=>{
+          const reader = new FileReader(); reader.onload = ()=>resolve(reader.result); reader.readAsDataURL(b);
+        }, 'image/png'));
+      }
+      continue;
+    }
+    if(field.type === 'photo'){
+      const fileInput = app.querySelector(`[name="${name}"]`);
+      const file = fileInput.files[0];
+      if(!file){ if(field.required){ showError(`Choose a file: ${field.label}`); return; } continue; }
+      answers[field.id] = await fileToDataUrl(file);
+      continue;
+    }
+
+    const value = raw[name];
+    if(field.required && (value === null || value === undefined || value === '' || (Array.isArray(value) && value.length===0))){
+      showError(`Answer: ${field.label}`); return;
+    }
+    if(value !== null && value !== undefined && value !== '') answers[field.id] = value;
+
+    // client-side gate pre-check — instant feedback; server re-checks regardless
+    if(field.gate && value !== null && value !== undefined && !evaluateGate(field, value)){
+      const warn = document.getElementById(`warn_${name}`);
+      warn.textContent = field.gate.message;
+      warn.style.display = 'block';
+      return;
+    }
+  }
+
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true; btn.textContent = 'Submitting…';
+  try{
+    const res = await callFunction('submit-form', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ site: siteSlug, form: formSlug, answers })
+    });
+    if(res.status === 'blocked'){
+      showBlocked(res.message, res.redirect_form);
+    } else if(res.status === 'passed'){
+      showConfirmation(res.visit_id);
+    } else {
+      showError(res.error || "Couldn't submit — try again.");
+      btn.disabled = false; btn.textContent = 'Submit';
+    }
+  }catch(e){
+    showError(e.message || "Couldn't submit — check your connection and try again.");
+    btn.disabled = false; btn.textContent = 'Submit';
+  }
+}
+
+function showError(msg){
+  const el = document.getElementById('formError');
+  el.textContent = msg; el.style.display = 'block';
+}
+
+function showBlocked(message, redirectForm){
+  app.innerHTML = `
+    <div class="confirm">
+      <div class="helptext" style="font-size:15px; color:var(--stamp-red); font-weight:600;">${escapeHtml(message)}</div>
+      ${redirectForm ? `<button class="btn" onclick="window.location.href='s.html?site=${encodeURIComponent(siteSlug)}&form=${encodeURIComponent(redirectForm)}'">Go to Orientation</button>` : ''}
+    </div>`;
+}
+
+function showConfirmation(visitId){
+  if(visitId) localStorage.setItem(`openVisit_${siteSlug}`, visitId);
+  app.innerHTML = `
+    <div class="confirm">
+      <div class="check">✓</div>
+      <div style="font-weight:700; margin-top:8px;">Submitted</div>
+      <div class="helptext">Have a safe day on site.</div>
+      ${visitId ? `<button class="btn" id="signOutBtn">Sign Out</button>` : ''}
+    </div>`;
+  if(visitId){
+    document.getElementById('signOutBtn').onclick = async ()=>{
+      const btn = document.getElementById('signOutBtn');
+      btn.disabled = true; btn.textContent = 'Signing out…';
+      try{
+        await callFunction('sign-out', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ visit_id: visitId }) });
+        localStorage.removeItem(`openVisit_${siteSlug}`);
+        app.innerHTML = `<div class="confirm"><div class="check">✓</div><div style="font-weight:700; margin-top:8px;">Signed out</div><div class="helptext">Have a safe trip home.</div></div>`;
+      }catch(e){
+        btn.disabled = false; btn.textContent = 'Sign Out';
+        showError("Couldn't sign out — check your connection and try again.");
+      }
+    };
+  }
+}
+
+loadForm();
+</script>
+</body>
+</html>
