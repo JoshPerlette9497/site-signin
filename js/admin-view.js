@@ -278,7 +278,7 @@ async function renderAdminDashboard(){
       </div>
       <div style="display:flex; gap:8px; margin-top:12px;">
         <button class="btn ghost" id="exportCsvBtn" style="flex:1;">Export CSV</button>
-        <button class="btn ghost" id="printBtn" style="flex:1;">Print Report</button>
+        <button class="btn ghost" id="printBtn" style="flex:1;">Download PDF</button>
       </div>
     </div>
 
@@ -314,7 +314,7 @@ async function renderAdminDashboard(){
     renderAdminFiltered();
   };
   document.getElementById('exportCsvBtn').onclick = exportCSV;
-  document.getElementById('printBtn').onclick = ()=>window.print();
+  document.getElementById('printBtn').onclick = exportPDF;
 
   try{
     [allVisits, allDocs, allSafetyForms] = await Promise.all([fetchSubVisits(), fetchSubDocs(), fetchSafetyForms()]);
@@ -510,4 +510,48 @@ function exportCSV(){
   a.href = url; a.download = `site-signin-${from}_to_${to}.csv`;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
+}
+
+/* Generates and downloads an actual PDF client-side instead of calling
+   window.print() — native print is unsupported (silently no-ops, no error)
+   on enough phones/browsers that it isn't reliable as the only way to get
+   a report out of this app. A downloaded file works the same way Export
+   CSV already does on every device. */
+function exportPDF(){
+  const items = getVisibleItems().filter(it => !excludedIds.has(it.id));
+  if(!items.length){ showToast('Nothing selected to export.'); return; }
+  if(!window.jspdf){ showToast("Couldn't load the PDF tool — check your connection and try again."); return; }
+  const from = document.getElementById('fromDate').value, to = document.getElementById('toDate').value;
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+  const marginX = 40, rightEdge = 572;
+  const pageHeight = doc.internal.pageSize.getHeight();
+  let y = 50;
+
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(16);
+  doc.text('Site Sign-In — Activity Report', marginX, y);
+  y += 20;
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+  doc.text(`${from} to ${to} — generated ${new Date().toLocaleString('en-US')}`, marginX, y);
+  y += 26;
+
+  items.forEach(it=>{
+    if(y > pageHeight - 80){ doc.addPage(); y = 50; }
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
+    doc.text(`${it.name || 'Unknown'}${it.company ? ' — ' + it.company : ''}`, marginX, y);
+    y += 14;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+    doc.text(`${it.label} · ${SITE_LABELS[it.site] || it.site || ''} · ${new Date(it.ts).toLocaleString('en-US')}`, marginX, y);
+    y += 12;
+    if(it.notes){
+      const lines = doc.splitTextToSize(it.notes, rightEdge - marginX);
+      doc.text(lines, marginX, y);
+      y += lines.length * 11;
+    }
+    y += 10;
+    doc.setDrawColor(216, 228, 228);
+    doc.line(marginX, y - 4, rightEdge, y - 4);
+  });
+
+  doc.save(`site-signin-${from}_to_${to}.pdf`);
 }
