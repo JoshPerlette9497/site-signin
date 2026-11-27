@@ -512,21 +512,100 @@ function exportCSV(){
   URL.revokeObjectURL(url);
 }
 
+/* Fetches an image URL and flattens it to a JPEG data URL on an offscreen
+   canvas — rather than handing jsPDF the raw fetched bytes directly — so
+   jsPDF always gets a format it actually supports (addImage chokes on
+   webp/heic) regardless of what the subcontractor's phone camera produced.
+   Throws if the browser can't decode the source format (e.g. HEIC outside
+   Safari); the caller falls back to a text link in that case. */
+async function loadImageAsJpegDataUrl(url){
+  const res = await fetch(url);
+  if(!res.ok) throw new Error(`fetch failed (${res.status})`);
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  try{
+    const img = await new Promise((resolve, reject)=>{
+      const image = new Image();
+      image.onload = ()=>resolve(image);
+      image.onerror = ()=>reject(new Error('could not decode image'));
+      image.src = objectUrl;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+    return { dataUrl: canvas.toDataURL('image/jpeg', 0.85), width: img.naturalWidth, height: img.naturalHeight };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 /* Generates and downloads an actual PDF client-side instead of calling
    window.print() — native print is unsupported (silently no-ops, no error)
    on enough phones/browsers that it isn't reliable as the only way to get
    a report out of this app. A downloaded file works the same way Export
-   CSV already does on every device. */
-function exportPDF(){
+   CSV already does on every device.
+
+   Unlike the CSV (one row per activity), this is meant to stand in for a
+   full paper file: every sign-in's crew/orientation/muster answers, every
+   sign-out, every hazard assessment/equipment cert/incident report
+   attachment, and every structured safety form's full Q&A plus each
+   signer's actual signature — drawn or uploaded images included, not just
+   noted as present. */
+async function exportPDF(){
   const items = getVisibleItems().filter(it => !excludedIds.has(it.id));
   if(!items.length){ showToast('Nothing selected to export.'); return; }
   if(!window.jspdf){ showToast("Couldn't load the PDF tool — check your connection and try again."); return; }
   const from = document.getElementById('fromDate').value, to = document.getElementById('toDate').value;
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit: 'pt', format: 'letter' });
-  const marginX = 40, rightEdge = 572;
+  const marginX = 40, rightEdge = 572, maxImgW = 220, maxImgH = 160;
   const pageHeight = doc.internal.pageSize.getHeight();
   let y = 50;
+
+  const btn = document.getElementById('printBtn');
+  if(btn){ btn.disabled = true; }
+  try{
+    await buildAndSavePDF();
+  }catch(e){
+    console.error('PDF export failed', e);
+    showToast("Couldn't finish the PDF — check your connection and try again.");
+  } finally {
+    if(btn){ btn.disabled = false; btn.textContent = 'Download PDF'; }
+  }
+
+  async function buildAndSavePDF(){
+
+  function ensureRoom(need){
+    if(y + need > pageHeight - 50){ doc.addPage(); y = 50; }
+  }
+  function textLine(str, opts = {}){
+    const { bold = false, size = 9, gap = 12, color = null } = opts;
+    doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(size);
+    if(color) doc.setTextColor(...color); else doc.setTextColor(0, 0, 0);
+    const lines = doc.splitTextToSize(String(str), rightEdge - marginX);
+    ensureRoom(lines.length * (gap - 1) + 4);
+    doc.text(lines, marginX, y);
+    y += lines.length * (gap - 1) + 4;
+  }
+  async function embedImageOrLink(url, label){
+    ensureRoom(20);
+    try{
+      const { dataUrl, width, height } = await loadImageAsJpegDataUrl(url);
+      const scale = Math.min(maxImgW / width, maxImgH / height, 1);
+      const w = width * scale, h = height * scale;
+      ensureRoom(h + 16);
+      doc.addImage(dataUrl, 'JPEG', marginX, y, w, h);
+      y += h + 10;
+    }catch(e){
+      doc.setTextColor(31, 92, 96);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+      doc.textWithLink(label || 'View attached file', marginX, y, { url });
+      doc.setTextColor(0, 0, 0);
+      y += 14;
+    }
+  }
 
   doc.setFont('helvetica', 'bold'); doc.setFontSize(16);
   doc.text('Site Sign-In — Activity Report', marginX, y);
@@ -535,23 +614,86 @@ function exportPDF(){
   doc.text(`${from} to ${to} — generated ${new Date().toLocaleString('en-US')}`, marginX, y);
   y += 26;
 
-  items.forEach(it=>{
-    if(y > pageHeight - 80){ doc.addPage(); y = 50; }
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
-    doc.text(`${it.name || 'Unknown'}${it.company ? ' — ' + it.company : ''}`, marginX, y);
-    y += 14;
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
-    doc.text(`${it.label} · ${SITE_LABELS[it.site] || it.site || ''} · ${new Date(it.ts).toLocaleString('en-US')}`, marginX, y);
-    y += 12;
-    if(it.notes){
-      const lines = doc.splitTextToSize(it.notes, rightEdge - marginX);
-      doc.text(lines, marginX, y);
-      y += lines.length * 11;
+  let i = 0;
+  for(const it of items){
+    i++;
+    if(btn) btn.textContent = `Generating… (${i}/${items.length})`;
+    ensureRoom(30);
+    textLine(`${it.name || 'Unknown'}${it.company ? ' — ' + it.company : ''}`, { bold: true, size: 11, gap: 14 });
+    textLine(`${it.label} · ${SITE_LABELS[it.site] || it.site || ''} · ${new Date(it.ts).toLocaleString('en-US')}`, { size: 9, gap: 13 });
+
+    // ---- sign-in details ----
+    if(it.crewCount != null){
+      textLine(`Crew of ${it.crewCount}: ${it.crewNames || ''}`);
     }
-    y += 10;
+    if(it.hadOrientation != null){
+      textLine(`Orientation: ${it.hadOrientation ? 'Yes' : 'No'}  ·  Muster point: ${MUSTER_LABELS[it.musterPoint] || it.musterPoint || ''}  ·  Fit for work: ${it.fitForWork ? 'Yes' : 'No'}`);
+    }
+    if(it.signatureType === 'typed'){
+      textLine(`Signature (typed): ${it.signatureText || ''}`, { color: [92, 119, 120] });
+    } else if(it.signatureType === 'drawn' && it.signatureUrl){
+      textLine('Signature:', { color: [92, 119, 120] });
+      await embedImageOrLink(it.signatureUrl, 'View signature image');
+    }
+
+    // ---- hazard assessment / equipment cert / incident report attachment ----
+    if(it.notes){
+      textLine(it.notes);
+    }
+    if(it.url){
+      if(isImageUrl(it.url)){
+        textLine('Attachment:', { color: [92, 119, 120] });
+        await embedImageOrLink(it.url, 'View attached file');
+      } else {
+        ensureRoom(14);
+        doc.setTextColor(31, 92, 96); doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+        doc.textWithLink('View attached file', marginX, y, { url: it.url });
+        doc.setTextColor(0, 0, 0);
+        y += 14;
+      }
+    }
+
+    // ---- structured safety form: full Q&A + every signer's signature ----
+    if(it.safetyForm){
+      const schema = SAFETY_FORMS[it.safetyForm.form_type];
+      if(schema){
+        for(const section of schema.sections){
+          const rows = section.fields.filter(f => f.type !== 'site' && it.safetyForm.answers[f.id] !== undefined);
+          if(!rows.length) continue;
+          ensureRoom(16);
+          textLine(section.title, { bold: true, size: 9, gap: 12, color: [92, 119, 120] });
+          for(const f of rows){
+            const raw = it.safetyForm.answers[f.id];
+            const display = f.type === 'ack' ? 'Acknowledged' : (f.type === 'yesno' ? (raw === 'yes' ? 'Yes' : 'No') : String(raw));
+            textLine(`${f.label}: ${display}`);
+          }
+        }
+      }
+      if(it.safetyForm.countersigned_by){
+        textLine(`Countersigned by ${it.safetyForm.countersigned_by} on ${new Date(it.safetyForm.countersigned_at).toLocaleDateString('en-US')}`);
+      } else {
+        textLine('Awaiting countersign', { color: [193, 68, 14] });
+      }
+      if(it.signers && it.signers.length){
+        ensureRoom(16);
+        textLine('Signed By', { bold: true, size: 9, gap: 12, color: [92, 119, 120] });
+        for(const s of it.signers){
+          textLine(s.name || 'Unknown', { bold: true });
+          if(s.signatureType === 'typed'){
+            textLine(`(typed) ${s.signatureText || ''}`, { color: [92, 119, 120] });
+          } else if(s.signatureFileUrl){
+            await embedImageOrLink(s.signatureFileUrl, 'View signature image');
+          }
+        }
+      }
+    }
+
+    y += 6;
     doc.setDrawColor(216, 228, 228);
-    doc.line(marginX, y - 4, rightEdge, y - 4);
-  });
+    doc.line(marginX, y, rightEdge, y);
+    y += 16;
+  }
 
   doc.save(`site-signin-${from}_to_${to}.pdf`);
+  }
 }
